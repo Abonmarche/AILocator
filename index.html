@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Locate Plans</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- ArcGIS Maps SDK for JavaScript -->
+    <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
+    <script src="https://js.arcgis.com/4.29/"></script>
+</head>
+<body>
+    <canvas id="orbs-bg"></canvas>
+    <div class="container">
+        <img src="https://abonmarche.maps.arcgis.com/sharing/rest/content/items/80a92cf5c4f548fc9eb5f62665bd4af2/data" alt="Abonmarche Logo" class="logo-img" />
+        <h1>Locate Plans</h1>
+        <div id="drop-zone">
+            <p>Drag & Drop Image or Zip</p>
+            <span class="max-size-note">Max 100MB</span>
+        </div>
+        <div id="file-info">
+            <p>Filename will appear here</p>
+        </div>
+        <div class="ai-key-box">
+            <label for="ai-key-input">AI Key</label>
+            <input type="text" id="ai-key-input" placeholder="Enter AI Key">
+        </div>
+        <div class="ai-key-box">
+            <label for="username-input">Username</label>
+            <input type="text" id="username-input" placeholder="Enter Username">
+        </div>
+        <div class="ai-key-box">
+            <label for="password-input">Password</label>
+            <input type="password" id="password-input" placeholder="Enter Password">
+        </div>
+        <div class="button-row">
+            <button id="check-credentials-btn">Check Credentials</button>
+        </div>
+        <div class="button-row">
+            <button id="check-ai-btn">Check AI</button>
+        </div>
+        <div class="button-row">
+            <button id="sign-out-btn" style="display:none;">Sign Out</button>
+        </div>
+        <div class="button-row">
+            <button id="geocode-btn" style="display:none;">Geocode</button>
+        </div>
+        <div id="processing-log-container">
+            <div id="processing-log-label">Processing Log</div>
+            <pre id="processing-log"></pre>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
