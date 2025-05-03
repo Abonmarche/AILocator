@@ -1,3 +1,38 @@
+// Upload PDF to Gemini File API and return file_uri
+async function uploadPdfToGemini(file, aiKey) {
+    // Step 1: Start resumable upload
+    const startRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(aiKey)}`,
+        {
+            method: 'POST',
+            headers: {
+                'X-Goog-Upload-Protocol': 'resumable',
+                'X-Goog-Upload-Command': 'start',
+                'X-Goog-Upload-Header-Content-Length': file.size,
+                'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ file: { display_name: file.name } })
+        });
+    const uploadUrl = startRes.headers.get('X-Goog-Upload-URL');
+    if (!uploadUrl) throw new Error('Failed to get Gemini upload URL');
+    // Step 2: Upload the PDF bytes
+    await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Length': file.size,
+            'X-Goog-Upload-Offset': '0',
+            'X-Goog-Upload-Command': 'upload, finalize'
+        },
+        body: file
+    });
+    // Step 3: Get file_uri from Gemini
+    const fileInfoRes = await fetch(uploadUrl, {
+        method: 'GET'
+    });
+    const fileInfo = await fileInfoRes.json();
+    if (!fileInfo.file || !fileInfo.file.uri) throw new Error('Failed to get file_uri from Gemini');
+    return fileInfo.file.uri;
+}
 // --- Processing Log ---
 const processingLog = document.getElementById('processing-log');
 function logStatus(msg) {
@@ -7,42 +42,106 @@ function logStatus(msg) {
 }
 // Removed duplicate geocodeBtn declaration and showGeocodeBtn function
 // --- AI & Geocoding Integration ---
-const FEATURE_LAYER_URL = "https://services5.arcgis.com/S5JQ6TlhA1BbeUBC/arcgis/rest/services/AIGeocoder/FeatureServer/0";
+const FEATURE_LAYER_URL = "https://services6.arcgis.com/o5a9nldztUcivksS/arcgis/rest/services/ProjectLimits/FeatureServer";
 const SPATIAL_REF = { wkid: 4326 };
 
 // Gemini (Google) API integration using REST fetch (no SDK required)
-async function analyzeImageWithAI(base64Image, aiKey) {
-    const prompt_text = `You are an expert OCR assistant trained specifically to interpret handwritten water/sewer connection permits.\nYou will be given an image of a permit filled out by applicants.\nYour task is to extract handwritten entries from known labeled sections of the form, which may vary slightly in position across permits.\nEach field is identified by printed text followed by a handwritten response on or near an underlined blank.\nWhen given an image, extract and return ONLY a JSON object with the following keys and rules (do not include any explanation or extra text):\n  • address: The handwritten address next to 'Location of Installation'. Append ' Marion Indiana 46952' to the result.\n  • date: The handwritten date next to the top-left 'Date:' label. Format it as MM-DD-YYYY.\n  • size: The first part of the handwritten value next to 'Size and Type of Service Line'. Convert to decimal inches (e.g., 3/4\" becomes 0.75, 1 1/2 becomes 1.5).\n  • material: The second part of the same field after the size. Interpret 'K' as 'copper', 'PVC' or 'poly' as 'PVC'. If no material is written, return null.\n  • notes: Capture any additional handwritten information near that section that does not belong to the other fields (such as 'behind curb' or hydrant direction), or return null if there are no notes.\nAssume handwriting may vary and values may be slightly misaligned. Only extract the fields listed above and return valid JSON.`;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
-    const body = {
-        contents: [
-            {
-                parts: [
-                    { text: prompt_text },
-                    { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-                ]
+
+// Unified function for both images and PDFs
+async function analyzeFileWithGemini(file, aiKey) {
+    const prompt_text = `You are an expert civil engineering assistant trained to analyze digital project plans (PDF or image) for municipal infrastructure projects.
+
+Your task is to decipher the project limits from the plan set and return a JSON object with the following fields:
+
+- start: The best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is not a single street segment or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
+- finish: (Optional) The best-identified ending location for the project. Only include this if the project is a single street segment and both start and end can be determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
+- projectnumber: The project number or identifier as shown on the plans, if available.
+- projectdate: The date of the project or the date shown on the plans, if available.
+- notes: Any additional relevant information about the project limits or context found in the plans.
+
+Instructions:
+1. First, determine if the project limits describe a single street segment. If so, extract the names of the two closest cross streets at the start and end of the segment.
+2. If the project is not a single street segment or the limits are unclear, omit the finish field and only provide the start field with any street name or intersection found.
+3. Return only a valid JSON object with the fields described above. Do not include any explanation or extra text.
+`;
+    if (isPdfFile(file.name)) {
+        // Upload PDF to Gemini File API and get file_uri
+        const fileUri = await uploadPdfToGemini(file, aiKey);
+        // Now call Gemini with file_uri
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const body = {
+            contents: [
+                {
+                    parts: [
+                        { text: prompt_text },
+                        { file_data: { mime_type: "application/pdf", file_uri: fileUri } }
+                    ]
+                }
+            ]
+        };
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        if (text.startsWith("```")) {
+            text = text.split("```", 2)[1] || text;
+            if (text.trim().startsWith("json")) {
+                text = text.trim().slice(4);
             }
-        ]
-    };
-    const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-    });
-    const data = await response.json();
-    let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-    // Remove Markdown code block if present
-    if (text.startsWith("```")) {
-        text = text.split("```", 2)[1] || text;
-        if (text.trim().startsWith("json")) {
-            text = text.trim().slice(4);
+            text = text.trim();
+            
         }
-        text = text.trim();
-    }
-    try {
-        return JSON.parse(text);
-    } catch (e) {
-        throw new Error("AI response could not be parsed as JSON: " + text);
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            // Throw error with details for outer catch
+            throw new Error(
+                'AI response could not be parsed as JSON.' +
+                '\nRaw AI response: ' + text +
+                '\nParse error: ' + (e && e.message ? e.message : e)
+            );
+        }
+    } else {
+        // Image: use base64 inline_data as before
+        const base64Image = await fileToBase64(file);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const body = {
+            contents: [
+                {
+                    parts: [
+                        { text: prompt_text },
+                        { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+                    ]
+                }
+            ]
+        };
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        if (text.startsWith("```")) {
+            text = text.split("```", 2)[1] || text;
+            if (text.trim().startsWith("json")) {
+                text = text.trim().slice(4);
+            }
+            text = text.trim();
+        }
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            // Throw error with details for outer catch
+            throw new Error(
+                'AI response could not be parsed as JSON.' +
+                '\nRaw AI response: ' + text +
+                '\nParse error: ' + (e && e.message ? e.message : e)
+            );
+        }
     }
 }
 
@@ -55,6 +154,59 @@ async function geocodeAddressAGOL(address, token) {
         return { x: loc.x, y: loc.y };
     }
     return null;
+}
+
+// Buffer a point geometry by a given distance (meters, WGS84)
+function bufferPointWGS84(x, y, meters) {
+    // Approximate 1 deg latitude ~ 111320 meters, 1 deg longitude ~ 111320*cos(lat)
+    const earthRadius = 6378137; // meters
+    const dLat = (meters / earthRadius) * (180 / Math.PI);
+    const dLon = dLat / Math.cos(y * Math.PI / 180);
+    // Create a simple circle polygon (32 points)
+    const points = [];
+    for (let i = 0; i < 32; i++) {
+        const angle = (i / 32) * 2 * Math.PI;
+        const px = x + dLon * Math.cos(angle);
+        const py = y + dLat * Math.sin(angle);
+        points.push([px, py]);
+    }
+    points.push(points[0]); // close the ring
+    return {
+        rings: [points],
+        spatialReference: SPATIAL_REF
+    };
+}
+
+// Buffer a line geometry by a given distance (meters, WGS84)
+function bufferLineWGS84(start, finish, meters) {
+    // We'll approximate by creating a buffer around the line segment (start, finish)
+    // For simplicity, create a rectangle around the line, then buffer the endpoints as circles
+    // This is a rough approximation for small distances
+    const earthRadius = 6378137; // meters
+    const dLat = (meters / earthRadius) * (180 / Math.PI);
+    const avgLat = (start.y + finish.y) / 2;
+    const dLon = dLat / Math.cos(avgLat * Math.PI / 180);
+    // Calculate perpendicular offset vector
+    const dx = finish.x - start.x;
+    const dy = finish.y - start.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    let offsetX = 0, offsetY = 0;
+    if (len > 0) {
+        offsetX = -(dy / len) * dLon;
+        offsetY = (dx / len) * dLat;
+    }
+    // Four corners of the rectangle
+    const p1 = [start.x + offsetX, start.y + offsetY];
+    const p2 = [finish.x + offsetX, finish.y + offsetY];
+    const p3 = [finish.x - offsetX, finish.y - offsetY];
+    const p4 = [start.x - offsetX, start.y - offsetY];
+    // Approximate buffer as a polygon
+    const ring = [p1, p2, p3, p4, p1];
+    // Optionally, could add semicircles at ends for better accuracy
+    return {
+        rings: [ring],
+        spatialReference: SPATIAL_REF
+    };
 }
 
 async function addFeatureToLayer(attributes, geometry, token) {
@@ -261,7 +413,6 @@ geocodeBtn.addEventListener('click', async function() {
         try {
             // Find the File object from the input (drag/drop)
             let fileObj = null;
-            // Try to find the file in the drop zone's FileList
             if (window.lastDroppedFiles && window.lastDroppedFiles.length) {
                 fileObj = Array.from(window.lastDroppedFiles).find(f => f.name === fname);
             }
@@ -269,51 +420,69 @@ geocodeBtn.addEventListener('click', async function() {
                 logStatus(`  Error: File object for ${fname} not found.`);
                 continue;
             }
-            // Convert to base64
-            logStatus('  Reading image...');
-            const base64 = await fileToBase64(fileObj);
-            // Analyze with Gemini
-            logStatus('  Sending to AI...');
+            // Analyze with Gemini (image or PDF)
+            logStatus('  Reading file...');
             let aiResult = null;
             try {
-                aiResult = await analyzeImageWithAI(base64, aiKey);
+                aiResult = await analyzeFileWithGemini(fileObj, aiKey);
             } catch (e) {
                 logStatus('  Error: AI response could not be parsed.');
+                if (e && e.message) logStatus(e.message);
+                if (e && e.stack) logStatus(e.stack);
                 continue;
             }
-            const address = aiResult.address;
-            logStatus(`  Found address: ${address || '[none]'}`);
-            if (!address) {
-                logStatus(`  No address found; skipping ${fname}`);
+            // Extract fields from AI result
+            const { start, finish, projectnumber, projectdate, notes } = aiResult;
+            if (!start) {
+                logStatus('  No start location found; skipping.');
                 continue;
             }
-            // Geocode
-            logStatus('  Geocoding address...');
-            let loc = null;
+            // Geocode start (and finish if present)
+            logStatus('  Geocoding start...');
+            let startLoc = null;
             try {
-                loc = await geocodeAddressAGOL(address, token);
+                startLoc = await geocodeAddressAGOL(start, token);
             } catch (e) {
-                logStatus(`  Error: Geocoding failed for ${address}`);
+                logStatus(`  Error: Geocoding failed for start: ${start}`);
                 continue;
             }
-            if (!loc) {
-                logStatus(`  Geocode failed for: ${address}`);
+            if (!startLoc) {
+                logStatus(`  Geocode failed for start: ${start}`);
                 continue;
             }
-            // Prepare attributes & geometry
+            let geometry = null;
+            if (finish) {
+                logStatus('  Geocoding finish...');
+                let finishLoc = null;
+                try {
+                    finishLoc = await geocodeAddressAGOL(finish, token);
+                } catch (e) {
+                    logStatus(`  Error: Geocoding failed for finish: ${finish}`);
+                    continue;
+                }
+                if (!finishLoc) {
+                    logStatus(`  Geocode failed for finish: ${finish}`);
+                    continue;
+                }
+                // Buffer the line between start and finish
+                geometry = bufferLineWGS84(startLoc, finishLoc, 10);
+            } else {
+                // Buffer the start point
+                geometry = bufferPointWGS84(startLoc.x, startLoc.y, 10);
+            }
+            // Prepare attributes for ArcGIS layer
             const attrs = {
-                address: address,
-                installdate: aiResult.date,
-                diameter: aiResult.size,
-                material: aiResult.material,
-                notes: aiResult.notes
+                start: start || '',
+                finish: finish || '',
+                projectnumber: projectnumber || '',
+                projectdate: projectdate || '',
+                notes: notes || ''
             };
-            const geom = { x: loc.x, y: loc.y, spatialReference: SPATIAL_REF };
             // Add to feature layer
             logStatus('  Adding feature to layer...');
             let addResp = null;
             try {
-                addResp = await addFeatureToLayer(attrs, geom, token);
+                addResp = await addFeatureToLayer(attrs, geometry, token);
             } catch (e) {
                 logStatus(`  Error: Failed to add feature for ${fname}`);
                 continue;
@@ -488,10 +657,15 @@ const fileInfoP = fileInfo.querySelector('p');
 const IMAGE_EXTENSIONS = [
     '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.svg'
 ];
+const PDF_EXTENSION = '.pdf';
 
 function isImageFile(name) {
     const lower = name.toLowerCase();
     return IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+function isPdfFile(name) {
+    return name.toLowerCase().endsWith(PDF_EXTENSION);
 }
 
 // Prevent default drag behaviors
@@ -551,8 +725,14 @@ function handleDrop(e) {
             window.lastDroppedFiles = [file];
             fileIsUploaded = true;
             updateGeocodeBtnVisibility();
+        } else if (file.type === 'application/pdf' || isPdfFile(file.name)) {
+            // Single PDF file
+            fileInfo.innerHTML = `<p>Received 1 PDF file:</p><ul><li>${file.name}</li></ul>`;
+            window.lastDroppedFiles = [file];
+            fileIsUploaded = true;
+            updateGeocodeBtnVisibility();
         } else {
-            fileInfo.innerHTML = '<p>Please drop an image file or a zip containing images.</p>';
+            fileInfo.innerHTML = '<p>Please drop an image, PDF, or a zip containing images or PDFs.</p>';
             fileIsUploaded = false;
             updateGeocodeBtnVisibility();
         }
@@ -569,11 +749,13 @@ function handleZipFile(file) {
         try {
             const zip = await JSZip.loadAsync(e.target.result);
             const imageFiles = [];
+            const pdfFiles = [];
             const fileBlobs = [];
             const promises = [];
             zip.forEach((relativePath, zipEntry) => {
-                if (!zipEntry.dir && isImageFile(zipEntry.name)) {
-                    imageFiles.push(zipEntry.name);
+                if (!zipEntry.dir && (isImageFile(zipEntry.name) || isPdfFile(zipEntry.name))) {
+                    if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
+                    if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
                     promises.push(zipEntry.async('blob').then(blob => {
                         // Create a File object if possible, else fallback to Blob with name
                         let f;
@@ -588,12 +770,16 @@ function handleZipFile(file) {
                 }
             });
             await Promise.all(promises);
-            if (imageFiles.length > 0) {
-                fileInfo.innerHTML = `<p>Received ${imageFiles.length} image file${imageFiles.length > 1 ? 's' : ''}:</p><ul>${imageFiles.map(name => `<li>${name}</li>`).join('')}</ul>`;
+            const totalFiles = imageFiles.length + pdfFiles.length;
+            if (totalFiles > 0) {
+                let summary = [];
+                if (imageFiles.length > 0) summary.push(`${imageFiles.length} image file${imageFiles.length > 1 ? 's' : ''}`);
+                if (pdfFiles.length > 0) summary.push(`${pdfFiles.length} PDF file${pdfFiles.length > 1 ? 's' : ''}`);
+                fileInfo.innerHTML = `<p>Received ${summary.join(' and ')}:</p><ul>${[...imageFiles, ...pdfFiles].map(name => `<li>${name}</li>`).join('')}</ul>`;
                 window.lastDroppedFiles = fileBlobs;
                 fileIsUploaded = true;
             } else {
-                fileInfo.innerHTML = '<p>No image files found in the zip.</p>';
+                fileInfo.innerHTML = '<p>No image or PDF files found in the zip.</p>';
                 window.lastDroppedFiles = [];
                 fileIsUploaded = false;
             }
