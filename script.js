@@ -84,7 +84,40 @@ Instructions:
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
         });
-        const data = await response.json();
+        logStatus(`  DEBUG: Received API status: ${response.status} ${response.statusText}`);
+        // --- Get response as raw text FIRST ---
+        const responseBodyText = await response.text();
+        logStatus(`  DEBUG: Raw API response body text: "${responseBodyText}"`);
+        console.log("Raw API response body text:", responseBodyText); // log to console
+
+        // --- NOW try to parse the raw text ---
+        let data;
+        try {
+            data = JSON.parse(responseBodyText);
+        } catch (parseError) {
+            logStatus(`  Error: Failed to parse API response body as JSON.`);
+            logStatus(`  Parse Error: ${parseError.message}`);
+            // Throw a new error that includes the status and raw text
+            throw new Error(`API response was not valid JSON. Status: ${response.status}. Body: ${responseBodyText}`);
+        }
+
+        // If parsing the response body succeeded, proceed ---
+        logStatus("  DEBUG: Successfully parsed API response body.");
+        console.log("Parsed API response data:", JSON.stringify(data, null, 2));
+        logStatus("  DEBUG: Full API response logged to browser console.");
+        // Check for API-level error
+        if (data.error) {
+            const errorMsg = `Gemini API returned an error: ${data.error.message || JSON.stringify(data.error)}`;
+            logStatus(`  Error: ${errorMsg}`);
+            throw new Error(errorMsg);
+        }
+        // Check for missing candidates
+        if (!data.candidates || !Array.isArray(data.candidates) || data.candidates.length === 0) {
+            const errorMsg = 'Gemini API response missing expected candidates structure.';
+            logStatus(`  Error: ${errorMsg}`);
+            logStatus(`  DEBUG: Received data: ${JSON.stringify(data)}`);
+            throw new Error(errorMsg);
+        }
         let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
         if (text.startsWith("```")) {
             text = text.split("```", 2)[1] || text;
@@ -92,15 +125,17 @@ Instructions:
                 text = text.trim().slice(4);
             }
             text = text.trim();
-            
         }
+        // Log the raw text before parsing
+        console.log("Attempting to parse the following text as JSON:", text);
+        logStatus(`  DEBUG: Raw text before JSON.parse: "${text}"`);
         try {
             return JSON.parse(text);
         } catch (e) {
             // Throw error with details for outer catch
             throw new Error(
                 'AI response could not be parsed as JSON.' +
-                '\nRaw AI response: ' + text +
+                '\nRaw AI response text: ' + text +
                 '\nParse error: ' + (e && e.message ? e.message : e)
             );
         }
@@ -124,6 +159,22 @@ Instructions:
             body: JSON.stringify(body)
         });
         const data = await response.json();
+        // Log full API response for debugging
+        console.log("Full Gemini API response:", JSON.stringify(data, null, 2));
+        logStatus("  DEBUG: Full API response logged to browser console.");
+        // Check for API-level error
+        if (data.error) {
+            const errorMsg = `Gemini API returned an error: ${data.error.message || JSON.stringify(data.error)}`;
+            logStatus(`  Error: ${errorMsg}`);
+            throw new Error(errorMsg);
+        }
+        // Check for missing candidates
+        if (!data.candidates || !Array.isArray(data.candidates) || data.candidates.length === 0) {
+            const errorMsg = 'Gemini API response missing expected candidates structure.';
+            logStatus(`  Error: ${errorMsg}`);
+            logStatus(`  DEBUG: Received data: ${JSON.stringify(data)}`);
+            throw new Error(errorMsg);
+        }
         let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
         if (text.startsWith("```")) {
             text = text.split("```", 2)[1] || text;
@@ -132,13 +183,16 @@ Instructions:
             }
             text = text.trim();
         }
+        // Log the raw text before parsing
+        console.log("Attempting to parse the following text as JSON:", text);
+        logStatus(`  DEBUG: Raw text before JSON.parse: "${text}"`);
         try {
             return JSON.parse(text);
         } catch (e) {
             // Throw error with details for outer catch
             throw new Error(
                 'AI response could not be parsed as JSON.' +
-                '\nRaw AI response: ' + text +
+                '\nRaw AI response text: ' + text +
                 '\nParse error: ' + (e && e.message ? e.message : e)
             );
         }
@@ -426,10 +480,16 @@ geocodeBtn.addEventListener('click', async function() {
             try {
                 aiResult = await analyzeFileWithGemini(fileObj, aiKey);
             } catch (e) {
-                logStatus('  Error: AI response could not be parsed.');
-                if (e && e.message) logStatus(e.message);
-                if (e && e.stack) logStatus(e.stack);
-                continue;
+                logStatus('  Error: Failed to analyze file with AI.');
+                // Log the detailed error message including the raw response if available
+                if (e && e.message) {
+                    logStatus('  AI Error Details:\n' + e.message.replace(/\n/g, '\n  '));
+                } else {
+                    logStatus('  AI Error Details: ' + e); // Fallback
+                }
+                // Optional: log stack trace to console for deeper debugging
+                console.error("AI Analysis Error Stack:", e);
+                continue; // Skip to next file
             }
             // Extract fields from AI result
             const { start, finish, projectnumber, projectdate, notes } = aiResult;
