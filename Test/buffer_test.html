@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ArcGIS geodesicBufferOperator Buffer Test</title>
+  <script src="https://js.arcgis.com/4.31/"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    #output { background: #f4f4f4; padding: 1em; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h2>ArcGIS geodesicBufferOperator Buffer Test</h2>
+  <div>
+    <b>Test Point:</b> <code>{ x: -86.25, y: 41.68 }</code><br>
+    <b>Test Line:</b> <code>[ [ -86.25, 41.68 ], [ -86.26, 41.69 ] ]</code><br><br>
+    <label for="bufferDistance"><b>Buffer Distance (meters):</b></label>
+    <input type="number" id="bufferDistance" value="10" min="0.1" step="0.1" style="width:80px;">
+  </div>
+  <button id="runTest">Run Buffer Test</button>
+  <div id="output"></div>
+  <script>
+    // Expose output div for the JS file
+    window.bufferTestOutput = document.getElementById('output');
+    document.getElementById('runTest').addEventListener('click', function() {
+      const dist = parseFloat(document.getElementById('bufferDistance').value);
+      if (isNaN(dist) || dist <= 0) {
+        window.bufferTestOutput.textContent = 'Please enter a valid buffer distance.';
+        return;
+      }
+      window.bufferTestOutput.textContent = 'Running buffer test...';
+      if (window.runBufferTest) {
+        window.runBufferTest(dist);
+      } else {
+        window.bufferTestOutput.textContent = 'Buffer test script not loaded.';
+      }
+    });
+  </script>
+  <script src="buffer_test.js"></script>
+</body>
+</html>

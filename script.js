@@ -367,139 +367,167 @@ geocodeBtn.addEventListener('click', async function() {
                 continue;
             }
 
-            // --- ArcGIS Geocoding for start and finish ---
-            if (aiData && (aiData.start || aiData.finish)) {
-                const locationDetails = locationDetailsInput ? locationDetailsInput.value.trim() : '';
-                require(["esri/rest/locator"], function(locator) {
-                    const locatorUrl = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
-                    let startPoint = null;
-                    let endPoint = null;
+// here
 
-                    // Helper to geocode an address and return a Promise for the point
+            // --- Geocode start-&-finish, then buffer & area ----------------------------
+            if (aiData && (aiData.start || aiData.finish)) {
+                const locationDetails = locationDetailsInput ? locationDetailsInput.value.trim() : "";
+
+                require(["esri/rest/locator"], function (locator) {
+                    const locatorUrl = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+
                     function geocodeAddress(address) {
-                        if (!address) return Promise.resolve(null);
-                        // Append location details for context
-                        const fullAddress = locationDetails ? `${address}, ${locationDetails}` : address;
-                        return locator.addressToLocations(locatorUrl, { address: { SingleLine: fullAddress }, outFields: ["*"], maxLocations: 1 })
-                            .then(function(candidates) {
-                                if (candidates && candidates.length > 0) {
-                                    const pt = candidates[0].location;
-                                    return pt;
-                                } else {
-                                    logStatus(`  Geocode: No candidates found for "${fullAddress}"`);
-                                    return null;
-                                }
-                            })
-                            .catch(function(err) {
-                                logStatus(`  Geocode error: ${err && err.message ? err.message : err}`);
-                                return null;
-                            });
+                        if (!address) { return Promise.resolve(null); }
+                        const full = locationDetails ? `${address}, ${locationDetails}` : address;
+
+                        return locator.addressToLocations(
+                            locatorUrl,
+                            { address: { SingleLine: full }, outFields: ["*"], maxLocations: 1 }
+                        )
+                        .then(c => (c && c.length ? c[0].location : null))
+                        .catch(err => {
+                            logStatus(`  Geocode error for "${full}": ${err.message || err}`);
+                            return null;
+                        });
                     }
 
-                    // Geocode start and finish, then form geometry
                     Promise.all([
                         geocodeAddress(aiData.start),
-                        aiData.finish ? geocodeAddress(aiData.finish) : Promise.resolve(null)
-                    ]).then(function([start, end]) {
-                        if (start) {
-                            logStatus(`  Start geocoded: (${start.x.toFixed(6)}, ${start.y.toFixed(6)})`);
-                        }
-                        if (end) {
-                            logStatus(`  End geocoded: (${end.x.toFixed(6)}, ${end.y.toFixed(6)})`);
-                        }
+                        geocodeAddress(aiData.finish)
+                    ]).then(function ([start, end]) {
 
-                        let geometryToBuffer = null;
-                        let geomType = '';
+                        if (start) logStatus(`  Start geocoded: (${start.x.toFixed(6)}, ${start.y.toFixed(6)})`);
+                        if (end)   logStatus(`  End   geocoded: (${end.x.toFixed(6)}, ${end.y.toFixed(6)})`);
+
+                        let geomType, arcgisGeom;
                         if (start && end) {
-                            // Create a line geometry (ArcGIS Polyline)
-                            geometryToBuffer = {
+                            geomType   = "Line";
+                            arcgisGeom = {
                                 type: "polyline",
-                                paths: [
-                                    [ [start.x, start.y], [end.x, end.y] ]
-                                ],
+                                paths: [ [ [start.x, start.y], [end.x, end.y] ] ],
                                 spatialReference: { wkid: 4326 }
                             };
-                            geomType = 'Line';
                         } else if (start) {
-                            // Use point geometry
-                            geometryToBuffer = {
+                            geomType   = "Point";
+                            arcgisGeom = {
                                 type: "point",
                                 x: start.x,
                                 y: start.y,
                                 spatialReference: { wkid: 4326 }
                             };
-                            geomType = 'Point';
+                        } else {
+                            logStatus("  No valid geometry to buffer.");
+                            return;
                         }
-                        if (geometryToBuffer) {
-                            logStatus(`Geometry to buffer: ${geomType}`);
-                            // Buffer the geometry 10 meters using ArcGIS geodesicBufferOperator (latest SDK, 4.31+)
-                            require([
-                                "esri/geometry/Point",
-                                "esri/geometry/Polyline",
-                                "esri/geometry/SpatialReference",
-                                "esri/geometry/operators/geodesicBufferOperator"
-                            ], function (
-                                Point,
-                                Polyline,
-                                SpatialReference,
-                                geodesicBufferOperator
-                            ) {
-                                logStatus("Buffer operator modules loaded.");
 
-                                // 1. Build the ArcGIS geometry we want to buffer
-                                const sr = new SpatialReference({ wkid: 4326 });
-                                const arcgisGeom =
-                                    geometryToBuffer.type === "point"
-                                        ? new Point({
-                                            x: geometryToBuffer.x,
-                                            y: geometryToBuffer.y,
-                                            spatialReference: sr
-                                        })
-                                        : new Polyline({
-                                            paths: geometryToBuffer.paths,
+                        logStatus(`  Geometry to buffer: ${geomType}`);
+
+// here
+
+                        require([
+                            "esri/geometry/Point",
+                            "esri/geometry/Polyline",
+                            "esri/geometry/SpatialReference",
+                            "esri/geometry/geometryEngine",
+                            "esri/geometry/operators/geodesicBufferOperator"
+                        ], function (
+                            Point,
+                            Polyline,
+                            SpatialReference,
+                            geometryEngine,
+                            geodesicBufferOperator
+                        ) {
+                            logStatus("  Loading geodesic buffer operator...");
+                            
+                            // Use Promise-based pattern matching your working test code
+                            geodesicBufferOperator.load().then(function() {
+                                try {
+                                    logStatus("  Operator modules loaded.");
+
+                                    const sr = new SpatialReference({ wkid: 4326 });
+                                    let realGeom;
+                                    
+                                    if (geomType === "Point") {
+                                        realGeom = new Point({
+                                            x: arcgisGeom.x,
+                                            y: arcgisGeom.y,
                                             spatialReference: sr
                                         });
+                                    } else {
+                                        realGeom = new Polyline({
+                                            paths: arcgisGeom.paths,
+                                            spatialReference: sr
+                                        });
+                                    }
 
-                                // 2. Ensure the operator’s dependencies are loaded, then buffer
-                                const ready = geodesicBufferOperator.isLoaded()
-                                    ? Promise.resolve()
-                                    : geodesicBufferOperator.load();
+                                    logStatus("  Buffering 10 m...");
+                                    
+                                    // Add the options parameter with unit: "meters"
+                                    const buffered = geodesicBufferOperator.execute(realGeom, 10, { unit: "meters" });
+                                    
+                                    if (!buffered) {
+                                        logStatus("  Buffer returned null.");
+                                        return;
+                                    }
+                                    
+                                    logStatus(`  ${geomType} buffered 10 m.`);
 
-                                ready
-                                    .then(() => {
-                                        logStatus("Attempting geodesicBufferOperator.execute…");
+                                    const area = geometryEngine.geodesicArea(buffered, "square-meters");
+                                    logStatus(`  Buffered area: ${area.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²`);
 
-                                        const bufferedGeometry = geodesicBufferOperator.execute(
-                                            arcgisGeom, // geometry to buffer
-                                            10, // distance
-                                            {
-                                                unit: "meters" // use string literal for unit
+                                    // Add buffered geometry to hosted feature layer
+                                    require(["esri/request"], function(esriRequest) {
+                                        const featureLayerUrl = "https://services6.arcgis.com/o5a9nldztUcivksS/arcgis/rest/services/ProjectLimits/FeatureServer/0/addFeatures";
+                                        // Prepare attributes from aiData
+                                        const attributes = {
+                                            start: aiData.start || null,
+                                            finish: aiData.finish || null,
+                                            projectnumber: aiData.projectnumber || null,
+                                            projectdate: aiData.projectdate || null,
+                                            notes: aiData.notes || null,
+                                            projectname: aiData.projectname || null
+                                        };
+                                        // Convert geometry to ArcGIS JSON
+                                        const geometryJson = buffered.toJSON ? buffered.toJSON() : buffered;
+                                        const feature = {
+                                            geometry: geometryJson,
+                                            attributes: attributes
+                                        };
+                                        esriRequest(featureLayerUrl, {
+                                            method: "post",
+                                            query: {
+                                                f: "json",
+                                                features: JSON.stringify([feature])
+                                            },
+                                            responseType: "json"
+                                        }).then(function(response) {
+                                            if (response.data && response.data.addResults && response.data.addResults[0] && response.data.addResults[0].success) {
+                                                logStatus("Project Added to Layer");
+                                            } else {
+                                                logStatus("  Error: Feature not added to layer.");
+                                                if (response.data && response.data.addResults && response.data.addResults[0] && response.data.addResults[0].error) {
+                                                    logStatus("  Layer Add Error: " + JSON.stringify(response.data.addResults[0].error));
+                                                }
                                             }
-                                        );
-
-                                        if (bufferedGeometry) {
-                                            logStatus(`${geomType} buffered 10 m successfully.`);
-                                            // ► add `bufferedGeometry` to your feature layer here
-                                        } else {
-                                            logStatus("Buffer returned null or undefined.");
-                                        }
-                                    })
-                                    .catch((err) => {
-                                        logStatus(`Geodesic buffer error: ${err.message || err}`);
-                                        console.error("Geodesic Buffer Error:", err);
+                                        }).catch(function(err) {
+                                            logStatus("  Error adding feature to layer: " + (err && err.message ? err.message : err));
+                                            console.error("Layer Add Error:", err);
+                                        });
                                     });
-                            },
-                            // Optional error-callback so a missing module doesn’t silently stall
-                            function (err) {
-                                logStatus(`Module-load error: ${err?.message || err}`);
+                                } catch (err) {
+                                    logStatus(`  Buffer/area error: ${err.message || err}`);
+                                    console.error("Buffer operation error:", err);
+                                }
+                            }).catch(function(err) {
+                                logStatus(`  Error loading geodesic buffer operator: ${err.message || err}`);
+                                console.error("Operator loading error:", err);
                             });
-                        } else {
-                            logStatus('No valid geometry to buffer.');
-                        }
+                        });
                     });
                 });
             }
-            // --- End ArcGIS Geocoding ---
+// here
+
         } catch (e) {
             logStatus(`  Error processing ${fname}: ${e}`);
         }
