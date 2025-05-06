@@ -1,36 +1,81 @@
 // Upload PDF to Gemini File API and return file_uri
 async function uploadPdfToGemini(file, aiKey) {
+    logStatus('  Starting PDF upload to Gemini File API...');
     // Step 1: Start resumable upload
-    const startRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(aiKey)}`,
-        {
+    const startUploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(aiKey)}`;
+    let startRes;
+    try {
+        startRes = await fetch(startUploadUrl, {
             method: 'POST',
             headers: {
                 'X-Goog-Upload-Protocol': 'resumable',
                 'X-Goog-Upload-Command': 'start',
-                'X-Goog-Upload-Header-Content-Length': file.size,
-                'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+                'X-Goog-Upload-Header-Content-Length': file.size.toString(),
+                'X-Goog-Upload-Header-Content-Type': file.type || 'application/pdf',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ file: { display_name: file.name } })
         });
-    const uploadUrl = startRes.headers.get('X-Goog-Upload-URL');
-    if (!uploadUrl) throw new Error('Failed to get Gemini upload URL');
-    // Step 2: Upload the PDF bytes
-    await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Length': file.size,
-            'X-Goog-Upload-Offset': '0',
-            'X-Goog-Upload-Command': 'upload, finalize'
-        },
-        body: file
-    });
-    // Step 3: Get file_uri from Gemini
-    const fileInfoRes = await fetch(uploadUrl, {
-        method: 'GET'
-    });
-    const fileInfo = await fileInfoRes.json();
-    if (!fileInfo.file || !fileInfo.file.uri) throw new Error('Failed to get file_uri from Gemini');
+    } catch (e) {
+        logStatus(`  Error during initial Gemini upload request: ${e.message}`);
+        throw new Error(`Network error or issue initiating Gemini upload: ${e.message}`);
+    }
+
+    if (!startRes.ok) {
+        const errorText = await startRes.text();
+        logStatus(`  Error starting Gemini upload (HTTP ${startRes.status}): ${errorText}`);
+        throw new Error(`Failed to start Gemini upload: ${startRes.status} ${errorText}`);
+    }
+
+    const resumableUploadUrl = startRes.headers.get('X-Goog-Upload-URL');
+    if (!resumableUploadUrl) {
+        logStatus('  Error: Gemini upload URL not received from start response.');
+        throw new Error('Failed to get Gemini upload URL from start response');
+    }
+    logStatus(`  Obtained resumable upload URL.`);
+
+    // Step 2: Upload the PDF bytes and finalize
+    logStatus('  Uploading PDF bytes...');
+    let uploadRes;
+    try {
+        uploadRes = await fetch(resumableUploadUrl, {
+            method: 'POST',
+            headers: {
+                'X-Goog-Upload-Command': 'upload, finalize',
+                'X-Goog-Upload-Offset': '0'
+                // Content-Length and Content-Type for the file body are typically handled by the browser
+            },
+            body: file
+        });
+    } catch (e) {
+        logStatus(`  Error during PDF byte upload to Gemini: ${e.message}`);
+        throw new Error(`Network error or issue uploading PDF bytes to Gemini: ${e.message}`);
+    }
+
+    if (!uploadRes.ok) {
+        const errorText = await uploadRes.text();
+        logStatus(`  Error uploading PDF to Gemini (HTTP ${uploadRes.status}): ${errorText}`);
+        throw new Error(`Failed to upload PDF to Gemini: ${uploadRes.status} ${errorText}`);
+    }
+
+    let fileInfo;
+    try {
+        // The response of the 'upload, finalize' command should be the File metadata JSON
+        fileInfo = await uploadRes.json();
+    } catch (e) {
+        // Try to get text if json parsing fails, as it might be an error message
+        const responseText = await uploadRes.text().catch(() => "Could not get response text after JSON parse failure.");
+        logStatus(`  Error parsing Gemini file upload response as JSON: ${e.message}. Response text: ${responseText}`);
+        throw new Error(`Failed to parse Gemini file upload response: ${e.message}. Raw response: ${responseText}`);
+    }
+    
+    logStatus('  PDF upload and finalization complete.');
+
+    if (!fileInfo.file || !fileInfo.file.uri) {
+        logStatus(`  Error: Gemini file upload response missing file URI. Response: ${JSON.stringify(fileInfo)}`);
+        throw new Error('Failed to get file_uri from Gemini upload response. Full response: ' + JSON.stringify(fileInfo));
+    }
+    logStatus(`  Obtained file URI: ${fileInfo.file.uri}`);
     return fileInfo.file.uri;
 }
 // --- Processing Log ---
@@ -51,25 +96,61 @@ const SPATIAL_REF = { wkid: 4326 };
 async function analyzeFileWithGemini(file, aiKey) {
     const prompt_text = `You are an expert civil engineering assistant trained to analyze digital project plans (PDF or image) for municipal infrastructure projects.
 
-Your task is to decipher the project limits from the plan set and return a JSON object with the following fields, in this order:
+Your task is to decipher the project limits from the plan set.
+The start is the best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is a single site or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
+The finish is Optional. The finish is the the best-identified ending location for the project. Only include this if the project is a single street segment and both start and end can be determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
+
+Return a JSON object with the following fields, in this order:
 
 - projectname: The name or title of the project as shown on the plans. This should be the main project name or title, if available. If not available, use the most descriptive name or title you can find.
-- start: The best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is not a single street segment or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
-- finish: (Optional) The best-identified ending location for the project. Only include this if the project is a single street segment and both start and end can be determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
 - projectnumber: The project number or identifier as shown on the plans, if available.
 - projectdate: The date of the project or the date shown on the plans, if available. Always return the date in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
 - notes: Any additional relevant information about the project limits or context found in the plans.
+- parts: An array of objects, each object **in one of two forms**  
+    Line part: { "start": "<intersection or address>", "finish": "<intersection or address>" }
+    Point part: { "start": "<intersection or address>" }
+    The array may contain any mix of line parts and point parts.
 
 Instructions:
 1. First, determine if the project limits describe a single street segment. If so, extract the names of the two closest cross streets at the start and end of the segment.
 2. If the project is not a single street segment or the limits are unclear, omit the finish field and only provide the start field with any street name or intersection found.
-3. When identifying street names, note that street name labels on plans often run parallel to the street orientation. The closest label to a street is not always the name of that street. Instead, look at the orientation of the road and then look along that road for its label in the same orientation. Use this to accurately match street names to their corresponding roads.
-4. Always return the projectdate in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
-5. Return only a valid JSON object with the fields described above, in the order listed. Do not include any explanation or extra text.
+3. If the project consists of multiple disconnected parts, include each part in the parts array. Each part should be either a Line part (with both start and finish) or a Point part (with only start). If the project is a single street segment, return it as a single Line part with both start and finish.
+4. When identifying street names, note that street name labels on plans often run parallel to the street orientation. The closest label to a street is not always the name of that street. Instead, look at the orientation of the road and then look along that road for its label in the same orientation. Use this to accurately match street names to their corresponding roads.
+5. Always return the projectdate in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
+6. Return only a valid JSON object with the fields described above, in the order listed. Do not include any explanation or extra text.
 
 Format your response as a JSON object with these fields only, in the order above. Do not include any extra text, markdown, or explanation.`;
 
+    // JSON schema for structured output (see https://ai.google.dev/gemini-api/docs/structured-output?lang=rest)
+    const response_schema = {
+        type: "object",
+        properties: {
+            projectname:   { type: "string", nullable: true },
+            projectnumber: { type: "string", nullable: true },
+            projectdate:   { type: "string", nullable: true },
+            notes:         { type: "string", nullable: true },
+            parts: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        start:  { type: "string" },
+                        finish: { type: "string", nullable: true }
+                    },
+                    required: ["start"],
+                    propertyOrdering: ["start", "finish"]
+                }
+            }
+        },
+        required: ["projectname", "projectnumber", "projectdate", "notes", "parts"],
+        propertyOrdering: ["projectname", "projectnumber", "projectdate", "notes", "parts"]
+    };
+
     let aiResponseText = '';
+    const generationConfig = {
+        response_mime_type: "application/json",
+        response_schema: response_schema
+    };
     if (isPdfFile(file.name)) {
         // For PDFs under 20MB, use inline_data (base64) as per REST docs
         if (file.size < 20 * 1024 * 1024) {
@@ -83,7 +164,8 @@ Format your response as a JSON object with these fields only, in the order above
                             { text: prompt_text }
                         ]
                     }
-                ]
+                ],
+                generationConfig
             };
             const response = await fetch(url, {
                 method: "POST",
@@ -93,24 +175,55 @@ Format your response as a JSON object with these fields only, in the order above
             aiResponseText = await response.text();
         } else {
             // For large PDFs, use the File API (file_uri) with the newest model
-            const fileUri = await uploadPdfToGemini(file, aiKey);
+            logStatus('  File is larger than 20MB, using File API for PDF.');
+            const fileUri = await uploadPdfToGemini(file, aiKey); // This will log its own progress/errors
+            logStatus(`  File uploaded, URI: ${fileUri}. Now calling generateContent.`);
+
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+            // Per Gemini docs, for large PDFs, prompt (text) should come first, then file_data
             const body = {
                 contents: [
                     {
                         parts: [
                             { text: prompt_text },
-                            { file_data: { mime_type: "application/pdf", file_uri: fileUri } }
+                            { file_data: { mime_type: file.type || "application/pdf", file_uri: fileUri } }
                         ]
                     }
-                ]
+                ],
+                generationConfig
             };
-            const response = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body)
-            });
-            aiResponseText = await response.text();
+
+            let genResponse; // Renamed to avoid conflict with 'response' in outer scope if any confusion
+            try {
+                genResponse = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body)
+                });
+            } catch (e) {
+                logStatus(`  Network error during Gemini generateContent call: ${e.message}`);
+                throw new Error(`Network error calling Gemini generateContent: ${e.message}`);
+            }
+            
+            aiResponseText = await genResponse.text(); // Get raw response text for logging / non-JSON cases
+
+            if (!genResponse.ok) {
+                logStatus(`  Gemini API generateContent error (HTTP ${genResponse.status}):`);
+                logStatus(`  Response: ${aiResponseText}`);
+                throw new Error(`Gemini API generateContent request failed with status ${genResponse.status}. Response: ${aiResponseText}`);
+            }
+
+            const contentType = genResponse.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                logStatus('  Gemini API generateContent error (non-JSON response):');
+                logStatus(`  Content-Type: ${contentType}`);
+                logStatus(`  Response: ${aiResponseText}`);
+                throw new Error(`Gemini API returned non-JSON content type ('${contentType}') for large PDF. Response: ${aiResponseText}`);
+            }
+            
+            // If we reach here, genResponse.ok is true and contentType is application/json.
+            // aiResponseText should be the valid JSON string from the API.
+            logStatus('  Gemini generateContent call successful for large PDF.');
         }
     } else {
         // Image: use base64 inline_data as before
@@ -124,7 +237,8 @@ Format your response as a JSON object with these fields only, in the order above
                         { inline_data: { mime_type: "image/jpeg", data: base64Image } }
                     ]
                 }
-            ]
+            ],
+            generationConfig
         };
         const response = await fetch(url, {
             method: "POST",
@@ -369,163 +483,125 @@ geocodeBtn.addEventListener('click', async function() {
 
 // here
 
-            // --- Geocode start-&-finish, then buffer & area ----------------------------
-            if (aiData && (aiData.start || aiData.finish)) {
-                const locationDetails = locationDetailsInput ? locationDetailsInput.value.trim() : "";
+                        // --- Geocode start-&-finish, then buffer & area ----------------------------
+                        // >>>>>>>>>>>>>>>>>  MULTI-PART LOGIC REPLACEMENT  >>>>>>>>>>>>>>>>>>
+                        if (aiData && Array.isArray(aiData.parts) && aiData.parts.length) {
+                            // Get user location details to append
+                            const locationDetails = locationDetailsInput && locationDetailsInput.value ? locationDetailsInput.value.trim() : '';
 
-                require(["esri/rest/locator"], function (locator) {
-                    const locatorUrl = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+                            require([
+                                "esri/rest/locator",
+                                "esri/geometry/Point",
+                                "esri/geometry/Polyline",
+                                "esri/geometry/SpatialReference",
+                                "esri/geometry/geometryEngine",
+                                "esri/geometry/operators/geodesicBufferOperator",
+                                "esri/request"
+                            ], function (
+                                locator,
+                                Point,
+                                Polyline,
+                                SpatialReference,
+                                geometryEngine,
+                                geodesicBufferOperator,
+                                esriRequest
+                            ) {
 
-                    function geocodeAddress(address) {
-                        if (!address) { return Promise.resolve(null); }
-                        const full = locationDetails ? `${address}, ${locationDetails}` : address;
+                                const locatorUrl = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer";
+                                const sr = new SpatialReference({ wkid: 4326 });
 
-                        return locator.addressToLocations(
-                            locatorUrl,
-                            { address: { SingleLine: full }, outFields: ["*"], maxLocations: 1 }
-                        )
-                        .then(c => (c && c.length ? c[0].location : null))
-                        .catch(err => {
-                            logStatus(`  Geocode error for "${full}": ${err.message || err}`);
-                            return null;
-                        });
-                    }
+                                // Helper to append location details if present
+                                const appendLoc = addr => {
+                                    if (!addr) return addr;
+                                    return locationDetails ? (addr + ' ' + locationDetails) : addr;
+                                };
 
-                    Promise.all([
-                        geocodeAddress(aiData.start),
-                        geocodeAddress(aiData.finish)
-                    ]).then(function ([start, end]) {
+                                const geocodeOne = addr =>
+                                    locator.addressToLocations(locatorUrl, {
+                                        address: { SingleLine: addr },
+                                        maxLocations: 1,
+                                        outFields: ["*"]
+                                    }).then(r => r[0]?.location || null);
 
-                        if (start) logStatus(`  Start geocoded: (${start.x.toFixed(6)}, ${start.y.toFixed(6)})`);
-                        if (end)   logStatus(`  End   geocoded: (${end.x.toFixed(6)}, ${end.y.toFixed(6)})`);
+                                // Geocode every part, appending location info
+                                const geoPromises = aiData.parts.map(p =>
+                                    p.start
+                                        ? Promise.all([
+                                            geocodeOne(appendLoc(p.start)),
+                                            geocodeOne(p.finish ? appendLoc(p.finish) : null)
+                                        ])
+                                        : geocodeOne(p.location ? appendLoc(p.location) : null)
+                                );
 
-                        let geomType, arcgisGeom;
-                        if (start && end) {
-                            geomType   = "Line";
-                            arcgisGeom = {
-                                type: "polyline",
-                                paths: [ [ [start.x, start.y], [end.x, end.y] ] ],
-                                spatialReference: { wkid: 4326 }
-                            };
-                        } else if (start) {
-                            geomType   = "Point";
-                            arcgisGeom = {
-                                type: "point",
-                                x: start.x,
-                                y: start.y,
-                                spatialReference: { wkid: 4326 }
-                            };
-                        } else {
-                            logStatus("  No valid geometry to buffer.");
-                            return;
-                        }
+                                Promise.all(geoPromises).then(async results => {
+                                    await geodesicBufferOperator.load();
 
-                        logStatus(`  Geometry to buffer: ${geomType}`);
+                                    const buffers = [];
+                                    const bufDist = 10, opt = { unit: "meters" };
 
-// here
+                                    results.forEach((res, i) => {
+                                        const part = aiData.parts[i];
+                                        let g = null;
 
-                        require([
-                            "esri/geometry/Point",
-                            "esri/geometry/Polyline",
-                            "esri/geometry/SpatialReference",
-                            "esri/geometry/geometryEngine",
-                            "esri/geometry/operators/geodesicBufferOperator"
-                        ], function (
-                            Point,
-                            Polyline,
-                            SpatialReference,
-                            geometryEngine,
-                            geodesicBufferOperator
-                        ) {
-                            logStatus("  Loading geodesic buffer operator...");
-                            
-                            // Use Promise-based pattern matching your working test code
-                            geodesicBufferOperator.load().then(function() {
-                                try {
-                                    logStatus("  Operator modules loaded.");
-
-                                    const sr = new SpatialReference({ wkid: 4326 });
-                                    let realGeom;
-                                    
-                                    if (geomType === "Point") {
-                                        realGeom = new Point({
-                                            x: arcgisGeom.x,
-                                            y: arcgisGeom.y,
-                                            spatialReference: sr
-                                        });
-                                    } else {
-                                        realGeom = new Polyline({
-                                            paths: arcgisGeom.paths,
-                                            spatialReference: sr
-                                        });
-                                    }
-
-                                    logStatus("  Buffering 10 m...");
-                                    
-                                    // Add the options parameter with unit: "meters"
-                                    const buffered = geodesicBufferOperator.execute(realGeom, 10, { unit: "meters" });
-                                    
-                                    if (!buffered) {
-                                        logStatus("  Buffer returned null.");
-                                        return;
-                                    }
-                                    
-                                    logStatus(`  ${geomType} buffered 10 m.`);
-
-                                    const area = geometryEngine.geodesicArea(buffered, "square-meters");
-                                    logStatus(`  Buffered area: ${area.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²`);
-
-                                    // Add buffered geometry to hosted feature layer
-                                    require(["esri/request"], function(esriRequest) {
-                                        const featureLayerUrl = "https://services6.arcgis.com/o5a9nldztUcivksS/arcgis/rest/services/ProjectLimits/FeatureServer/0/addFeatures";
-                                        // Prepare attributes from aiData
-                                        const attributes = {
-                                            start: aiData.start || null,
-                                            finish: aiData.finish || null,
-                                            projectnumber: aiData.projectnumber || null,
-                                            projectdate: aiData.projectdate || null,
-                                            notes: aiData.notes || null,
-                                            projectname: aiData.projectname || null
-                                        };
-                                        // Convert geometry to ArcGIS JSON
-                                        const geometryJson = buffered.toJSON ? buffered.toJSON() : buffered;
-                                        const feature = {
-                                            geometry: geometryJson,
-                                            attributes: attributes
-                                        };
-                                        esriRequest(featureLayerUrl, {
-                                            method: "post",
-                                            query: {
-                                                f: "json",
-                                                features: JSON.stringify([feature])
-                                            },
-                                            responseType: "json"
-                                        }).then(function(response) {
-                                            if (response.data && response.data.addResults && response.data.addResults[0] && response.data.addResults[0].success) {
-                                                logStatus("Project Added to Layer");
-                                            } else {
-                                                logStatus("  Error: Feature not added to layer.");
-                                                if (response.data && response.data.addResults && response.data.addResults[0] && response.data.addResults[0].error) {
-                                                    logStatus("  Layer Add Error: " + JSON.stringify(response.data.addResults[0].error));
-                                                }
+                                        if (part.start) {                 // line part
+                                            const [s, e] = res;
+                                            if (s && e) {
+                                                g = new Polyline({
+                                                    paths: [[[s.x, s.y], [e.x, e.y]]],
+                                                    spatialReference: sr
+                                                });
                                             }
-                                        }).catch(function(err) {
-                                            logStatus("  Error adding feature to layer: " + (err && err.message ? err.message : err));
-                                            console.error("Layer Add Error:", err);
-                                        });
+                                        } else if (res) {                 // point part
+                                            g = new Point({ x: res.x, y: res.y, spatialReference: sr });
+                                        }
+
+                                        if (g) {
+                                            const b = geodesicBufferOperator.execute(g, bufDist, opt);
+                                            if (b) buffers.push(b);
+                                        }
                                     });
-                                } catch (err) {
-                                    logStatus(`  Buffer/area error: ${err.message || err}`);
-                                    console.error("Buffer operation error:", err);
-                                }
-                            }).catch(function(err) {
-                                logStatus(`  Error loading geodesic buffer operator: ${err.message || err}`);
-                                console.error("Operator loading error:", err);
+
+                                    if (!buffers.length) { logStatus("  No valid buffers."); return; }
+
+                                    // Union all buffers
+                                    const unioned = buffers.length === 1 ? buffers[0]
+                                        : geometryEngine.union(buffers);
+
+                                    const area = geometryEngine.geodesicArea(unioned, "square-meters");
+                                    logStatus(`  Unioned buffer area: ${area.toFixed(0)} m²`);
+
+                                    // Add to feature layer
+                                    const feature = {
+                                        geometry: unioned.toJSON(),
+                                        attributes: {
+                                            projectname:   aiData.projectname   || null,
+                                            projectnumber: aiData.projectnumber || null,
+                                            projectdate:   aiData.projectdate   || null,
+                                            notes:         aiData.notes         || null,
+                                            parts_json:    JSON.stringify(aiData.parts)
+                                        }
+                                    };
+
+                                    const addUrl = `${FEATURE_LAYER_URL}/0/addFeatures`;
+                                    esriRequest(addUrl, {
+                                        method: "post",
+                                        query: { f: "json", features: JSON.stringify([feature]) },
+                                        responseType: "json"
+                                    }).then(r => {
+                                        if (r.data?.addResults?.[0]?.success) {
+                                            logStatus("Project Added to Layer");
+                                        } else {
+                                            logStatus("  Error: Feature not added.");
+                                            logStatus("  Layer Add Error: " + JSON.stringify(r.data?.addResults?.[0]?.error));
+                                        }
+                                    }).catch(err => {
+                                        logStatus("  Error adding feature: " + (err.message || err));
+                                    });
+                                });
                             });
-                        });
-                    });
-                });
-            }
+                        }
+                        // <<<<<<<<<<<<<<<<<  END MULTI-PART LOGIC REPLACEMENT  <<<<<<<<<<<<<<<<<
+
 // here
 
         } catch (e) {
