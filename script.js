@@ -96,10 +96,10 @@ const SPATIAL_REF = { wkid: 4326 };
 async function analyzeFileWithGemini(file, aiKey) {
     const prompt_text = `You are an expert civil engineering assistant trained to analyze digital project plans (PDF or image) for municipal infrastructure projects.
 
-Your task is to decipher the project limits from the plan set.
+Your task is to decipher the project limits from the plan set. The project limits can be a single site, a single street segment, or multiple disconnected parts.
 The start is the best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is a single site or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
-The finish is Optional. The finish is the the best-identified ending location for the project. Only include this if the project is a single street segment and both start and end can be determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
-Be conservative in your interpretation of the road segment project limits. If the start or end of a road segment is not clear or hard to determine lean toward only listing the street name or single intersection as the start without a finish.
+The finish is Optional. Only include this if the project is clearly and confidently identified as a single street segment with both start and end intersections clearly determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
+Exercise caution when determining road segment limits. If you are not confident about either the start or end intersection, do not attempt to define a segment. Instead, list only a clearly identified street name or intersection as a single point to avoid inaccurate or excessively large road segment definitions.
 
 Return a JSON object with the following fields, in this order:
 
@@ -114,10 +114,10 @@ Return a JSON object with the following fields, in this order:
 
 Instructions:
 1. First, determine if the project limits describe a single street segment. If so, extract the names of the two closest cross streets at the start and end of the segment.
-2. If the project is not a single street segment or the limits are unclear, omit the finish field and only provide the start field with any street name or intersection found.
+2. If the project is a single site or the limits are unclear, omit the finish field and only provide the start field with any street name or intersection found.
 3. If the project consists of multiple disconnected parts, include each part in the parts array. Each part should be either a Line part (with both start and finish) or a Point part (with only start). If the project is a single street segment, return it as a single Line part with both start and finish.
 4. When identifying street names, note that street name labels on plans often run parallel to the street orientation. The closest label to a street is not always the name of that street. Instead, look at the orientation of the road and then look along that road for its label in the same orientation. Use this to accurately match street names to their corresponding roads.
-5. If the start or finish of a road segment are unclear be conservative and use a single intersection to make a point part.
+5. Be cautious and conservative: if there is any uncertainty about accurately defining both start and finish intersections for a road segment, default to using a single intersection or street name as a point part.
 6. Always return the projectdate in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
 7. Return only a valid JSON object with the fields described above, in the order listed. Do not include any explanation or extra text.
 
