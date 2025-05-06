@@ -99,6 +99,7 @@ async function analyzeFileWithGemini(file, aiKey) {
 Your task is to decipher the project limits from the plan set.
 The start is the best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is a single site or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
 The finish is Optional. The finish is the the best-identified ending location for the project. Only include this if the project is a single street segment and both start and end can be determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
+Be conservative in your interpretation of the road segment project limits. If the start or end of a road segment is not clear or hard to determine lean toward only listing the street name or single intersection as the start without a finish.
 
 Return a JSON object with the following fields, in this order:
 
@@ -116,8 +117,9 @@ Instructions:
 2. If the project is not a single street segment or the limits are unclear, omit the finish field and only provide the start field with any street name or intersection found.
 3. If the project consists of multiple disconnected parts, include each part in the parts array. Each part should be either a Line part (with both start and finish) or a Point part (with only start). If the project is a single street segment, return it as a single Line part with both start and finish.
 4. When identifying street names, note that street name labels on plans often run parallel to the street orientation. The closest label to a street is not always the name of that street. Instead, look at the orientation of the road and then look along that road for its label in the same orientation. Use this to accurately match street names to their corresponding roads.
-5. Always return the projectdate in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
-6. Return only a valid JSON object with the fields described above, in the order listed. Do not include any explanation or extra text.
+5. If the start or finish of a road segment are unclear be conservative and use a single intersection to make a point part.
+6. Always return the projectdate in the numeric format MM/DD/YYYY (e.g., "05/01/2025"). If the day is missing, use "01" as the day (e.g., "05/01/2025"). If the month is missing, use "01" as the month (e.g., "01/01/2025"). If the year is missing, set the field to null.
+7. Return only a valid JSON object with the fields described above, in the order listed. Do not include any explanation or extra text.
 
 Format your response as a JSON object with these fields only, in the order above. Do not include any extra text, markdown, or explanation.`;
 
@@ -433,17 +435,42 @@ function setButtonState(signedIn, fullName) {
 }
 
 geocodeBtn.addEventListener('click', async function() {
-    geocodeBtn.textContent = 'Working';
-    geocodeBtn.disabled = true;
-    processingLog.textContent = '';
+    if (this.textContent === 'Complete') {
+        // Clear log, file info, and reset state
+        if (processingLog) {
+            processingLog.textContent = '';
+        }
+        // Assuming 'fileInfo' is the DOM element container for the file list
+        if (typeof fileInfo !== 'undefined' && fileInfo) {
+            fileInfo.innerHTML = '<p>Filename will appear here</p>';
+        }
+        window.lastDroppedFiles = [];
+        fileIsUploaded = false; // Reset file upload state
+
+        this.textContent = 'Geocode'; // Reset button text
+        // geocodeBtn.disabled is already false if textContent was 'Complete'
+        
+        updateGeocodeBtnVisibility(); // Update button visibility based on new state
+        return; // Stop further execution, do not reprocess
+    }
+
+    this.textContent = 'Working';
+    this.disabled = true;
+    if (processingLog) {
+        processingLog.textContent = ''; // Clear log for new processing
+    }
     logStatus('--- AI File Analysis Started ---');
 
     // Find uploaded file(s) from fileInfo (UI) and process
     let fileList = [];
-    const fileInfoList = fileInfo.querySelector('ul');
-    if (fileInfoList) {
-        fileList = Array.from(fileInfoList.querySelectorAll('li')).map(li => li.textContent);
+    // Assuming 'fileInfo' is the DOM element container for the file list
+    if (typeof fileInfo !== 'undefined' && fileInfo) {
+        const fileInfoList = fileInfo.querySelector('ul');
+        if (fileInfoList) {
+            fileList = Array.from(fileInfoList.querySelectorAll('li')).map(li => li.textContent);
+        }
     }
+
     if (fileList.length === 0) {
         logStatus('No files to process.');
         geocodeBtn.textContent = 'Complete';
@@ -480,8 +507,6 @@ geocodeBtn.addEventListener('click', async function() {
                 console.error("AI Analysis Error Stack:", e);
                 continue;
             }
-
-// here
 
                         // --- Geocode start-&-finish, then buffer & area ----------------------------
                         // >>>>>>>>>>>>>>>>>  MULTI-PART LOGIC REPLACEMENT  >>>>>>>>>>>>>>>>>>
@@ -602,27 +627,13 @@ geocodeBtn.addEventListener('click', async function() {
                         }
                         // <<<<<<<<<<<<<<<<<  END MULTI-PART LOGIC REPLACEMENT  <<<<<<<<<<<<<<<<<
 
-// here
-
         } catch (e) {
             logStatus(`  Error processing ${fname}: ${e}`);
         }
     }
     logStatus('--- AI File Analysis Complete ---');
-    geocodeBtn.textContent = 'Complete';
-    geocodeBtn.disabled = false;
-
-    // Add one-time event listener to clear log and files on next click if button says Complete
-    function handleCompleteClick() {
-        if (geocodeBtn.textContent === 'Complete') {
-            processingLog.textContent = '';
-            fileInfo.innerHTML = '<p>Filename will appear here</p>';
-            window.lastDroppedFiles = [];
-            geocodeBtn.textContent = 'Geocode';
-            geocodeBtn.removeEventListener('click', handleCompleteClick);
-        }
-    }
-    geocodeBtn.addEventListener('click', handleCompleteClick);
+    this.textContent = 'Complete';
+    this.disabled = false;
 });
 
 // Track last sign-in attempt for button text
