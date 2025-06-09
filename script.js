@@ -612,9 +612,33 @@ geocodeBtn.addEventListener('click', async function() {
                                         method: "post",
                                         query: { f: "json", features: JSON.stringify([feature]) },
                                         responseType: "json"
-                                    }).then(r => {
+                                    }).then(async r => {
                                         if (r.data?.addResults?.[0]?.success) {
                                             logStatus("Project Added to Layer");
+                                            const oid = r.data.addResults[0].objectId;
+                                            if (oid && fileObj && (fileObj.type === 'application/pdf' || fileObj.name.toLowerCase().endsWith('.pdf'))) {
+                                                const attUrl = `${FEATURE_LAYER_URL}/0/${oid}/addAttachment`;
+                                                const formData = new FormData();
+                                                formData.append('attachment', fileObj, fileObj.name);
+                                                formData.append('f', 'json');
+                                                try {
+                                                    const attRes = await esriRequest(attUrl, {
+                                                        method: 'post',
+                                                        body: formData,
+                                                        responseType: 'json'
+                                                    });
+                                                    if (attRes.data?.addAttachmentResult?.success) {
+                                                        logStatus('  Attachment added.');
+                                                    } else {
+                                                        logStatus('  Failed to add attachment.');
+                                                        if (attRes.data?.addAttachmentResult?.error) {
+                                                            logStatus('  Attach Error: ' + JSON.stringify(attRes.data.addAttachmentResult.error));
+                                                        }
+                                                    }
+                                                } catch(attErr) {
+                                                    logStatus('  Error adding attachment: ' + (attErr.message || attErr));
+                                                }
+                                            }
                                         } else {
                                             logStatus("  Error: Feature not added.");
                                             logStatus("  Layer Add Error: " + JSON.stringify(r.data?.addResults?.[0]?.error));
