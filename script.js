@@ -305,7 +305,8 @@ function fileToBase64(file) {
         reader.readAsDataURL(file);
     });
 }
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_INDIVIDUAL_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_ZIP_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 const signOutBtn = document.getElementById('sign-out-btn');
 
 function showSignOut(show) {
@@ -847,22 +848,34 @@ function handleDrop(e) {
 
     if (files.length > 0) {
         const file = files[0];
-        if (file.size > MAX_FILE_SIZE) {
-            fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 100MB.</p>';
-            fileIsUploaded = false;
-            updateGeocodeBtnVisibility();
-            return;
-        }
         if (file.type === 'application/zip' || file.name.toLowerCase().endsWith('.zip')) {
+            if (file.size > MAX_ZIP_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>Zip file is too large. Maximum allowed size is 100MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Handle zip file
             handleZipFile(file);
         } else if (file.type.startsWith('image/') || isImageFile(file.name)) {
+            if (file.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 10MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Single image file
             fileInfo.innerHTML = `<p>Received 1 image file:</p><ul><li>${file.name}</li></ul>`;
             window.lastDroppedFiles = [file];
             fileIsUploaded = true;
             updateGeocodeBtnVisibility();
         } else if (file.type === 'application/pdf' || isPdfFile(file.name)) {
+            if (file.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 10MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Single PDF file
             fileInfo.innerHTML = `<p>Received 1 PDF file:</p><ul><li>${file.name}</li></ul>`;
             window.lastDroppedFiles = [file];
@@ -889,37 +902,54 @@ function handleZipFile(file) {
             const pdfFiles = [];
             const fileBlobs = [];
             const promises = [];
+            const oversizedFiles = [];
             zip.forEach((relativePath, zipEntry) => {
                 if (!zipEntry.dir && (isImageFile(zipEntry.name) || isPdfFile(zipEntry.name))) {
-                    if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
-                    if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
                     promises.push(zipEntry.async('blob').then(blob => {
-                        // Create a File object if possible, else fallback to Blob with name
-                        let f;
-                        try {
-                            f = new File([blob], zipEntry.name, { type: blob.type });
-                        } catch {
-                            f = blob;
-                            f.name = zipEntry.name;
+                        if (blob.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size });
+                        } else {
+                            if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
+                            if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
+                            // Create a File object if possible, else fallback to Blob with name
+                            let f;
+                            try {
+                                f = new File([blob], zipEntry.name, { type: blob.type });
+                            } catch {
+                                f = blob;
+                                f.name = zipEntry.name;
+                            }
+                            fileBlobs.push(f);
                         }
-                        fileBlobs.push(f);
                     }));
                 }
             });
             await Promise.all(promises);
+
+            let message = '';
+            if (oversizedFiles.length > 0) {
+                const errorMessages = oversizedFiles.map(f => `<li>${f.name} (${(f.size / 1024 / 1024).toFixed(2)}MB)</li>`).join('');
+                message += `<p>The following files inside the zip exceed the 10MB limit and were ignored:</p><ul>${errorMessages}</ul>`;
+            }
+
             const totalFiles = imageFiles.length + pdfFiles.length;
             if (totalFiles > 0) {
                 let summary = [];
                 if (imageFiles.length > 0) summary.push(`${imageFiles.length} image file${imageFiles.length > 1 ? 's' : ''}`);
                 if (pdfFiles.length > 0) summary.push(`${pdfFiles.length} PDF file${pdfFiles.length > 1 ? 's' : ''}`);
-                fileInfo.innerHTML = `<p>Received ${summary.join(' and ')}:</p><ul>${[...imageFiles, ...pdfFiles].map(name => `<li>${name}</li>`).join('')}</ul>`;
+                if (message) {
+                    message += '<br>';
+                }
+                message += `<p>Received ${summary.join(' and ')}:</p><ul>${[...imageFiles, ...pdfFiles].map(name => `<li>${name}</li>`).join('')}</ul>`;
                 window.lastDroppedFiles = fileBlobs;
                 fileIsUploaded = true;
-            } else {
-                fileInfo.innerHTML = '<p>No image or PDF files found in the zip.</p>';
+            } else if (oversizedFiles.length === 0) {
+                message = '<p>No image or PDF files found in the zip.</p>';
                 window.lastDroppedFiles = [];
                 fileIsUploaded = false;
             }
+            
+            fileInfo.innerHTML = message;
             updateGeocodeBtnVisibility();
         } catch (err) {
             fileInfo.innerHTML = '<p>Error reading zip file.</p>';
