@@ -568,15 +568,17 @@ geocodeBtn.addEventListener('click', async function() {
                                         const part = aiData.parts[i];
                                         let g = null;
 
-                                        if (part.start) {                 // line part
+                                        if (Array.isArray(res)) { // A part with a 'start' property was geocoded
                                             const [s, e] = res;
-                                            if (s && e) {
+                                            if (s && e) { // Both start and end geocoded successfully -> Polyline
                                                 g = new Polyline({
                                                     paths: [[[s.x, s.y], [e.x, e.y]]],
                                                     spatialReference: sr
                                                 });
+                                            } else if (s) { // Only start geocoded successfully -> Point
+                                                g = new Point({ x: s.x, y: s.y, spatialReference: sr });
                                             }
-                                        } else if (res) {                 // point part
+                                        } else if (res) { // A part with a 'location' property was geocoded
                                             g = new Point({ x: res.x, y: res.y, spatialReference: sr });
                                         }
 
