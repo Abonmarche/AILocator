@@ -804,11 +804,21 @@ geocodeBtn.addEventListener('click', async function() {
                                     // Get the feature layer URL from input
                                     const featureLayerUrl = document.getElementById('feature-layer-url').value.trim();
                                     const addUrl = `${featureLayerUrl}/addFeatures`;
+                                    
+                                    // Get authentication token for the request
+                                    const token = await getCurrentToken();
+                                    const queryParams = { 
+                                        f: "json", 
+                                        features: JSON.stringify([feature])
+                                    };
+                                    if (token) {
+                                        queryParams.token = token;
+                                    }
+                                    
                                     esriRequest(addUrl, {
                                         method: "post",
-                                        query: { f: "json", features: JSON.stringify([feature]) },
+                                        query: queryParams,
                                         responseType: "json"
-                                    }).then(async r => {
                                     }).then(async r => {
                                         if (r.data?.addResults?.[0]?.success) {
                                             logStatus("Project Added to Layer");
