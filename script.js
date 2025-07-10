@@ -157,7 +157,7 @@ Format your response as a JSON object with these fields only, in the order above
         // For PDFs under 20MB, use inline_data (base64) as per REST docs
         if (file.size < 20 * 1024 * 1024) {
             const base64Pdf = await fileToBase64(file);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
             const body = {
                 contents: [
                     {
@@ -181,7 +181,7 @@ Format your response as a JSON object with these fields only, in the order above
             const fileUri = await uploadPdfToGemini(file, aiKey); // This will log its own progress/errors
             logStatus(`  File uploaded, URI: ${fileUri}. Now calling generateContent.`);
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
             // Per Gemini docs, for large PDFs, prompt (text) should come first, then file_data
             const body = {
                 contents: [
@@ -230,7 +230,7 @@ Format your response as a JSON object with these fields only, in the order above
     } else {
         // Image: use base64 inline_data as before
         const base64Image = await fileToBase64(file);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
         const body = {
             contents: [
                 {
@@ -377,7 +377,7 @@ checkAIButton.addEventListener('click', async function() {
     checkAIButton.disabled = true;
     try {
         // Use Gemini API with a silly prompt
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
         const body = {
             contents: [
                 { parts: [ { text: 'Reply with three silly words to prove you are alive.' } ] }
