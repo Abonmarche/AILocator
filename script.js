@@ -285,6 +285,8 @@ Your task is to decipher the project limits from the plan set. The project limit
 The start is the best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is a single site or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
 The finish is Optional. Only include this if the project is clearly and confidently identified as a single street segment with both start and end intersections clearly determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
 Exercise caution when determining road segment limits. If you are not confident about either the start or end intersection, do not attempt to define a segment. Instead, list only a clearly identified street name or intersection as a single point to avoid inaccurate or excessively large road segment definitions.
+When looking for a location on a site plan don't forget to check the title block for a location description or site address. Make sure it is not the address of the organization that created the plans, but the actual project site address if available.
+Road plans sometimes have an overall project limits sheet that shows the project limits for the entire project. If this is not available, use the plan pages that may be a sheet set made up of multiple sheets, each with a different section of the project.
 
 Return a JSON object with the following fields, in this order:
 
