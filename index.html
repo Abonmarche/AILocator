@@ -38,6 +38,25 @@
             <label for="location-details-input">Location</label>
             <input type="text" id="location-details-input" placeholder="Benton Harbor, MI 49022">
         </div>
+        <div class="ai-key-box">
+            <label for="feature-layer-url">Feature Layer URL</label>
+            <input type="text" id="feature-layer-url" placeholder="https://.../FeatureServer/0">
+        </div>
+        <div class="upload-options">
+            <label>Upload Options:</label>
+            <div>
+                <input type="radio" id="upload-option-1" name="upload-option" value="1" checked>
+                <label for="upload-option-1">Attach files under 10MB, upload larger files to AGOL</label>
+            </div>
+            <div>
+                <input type="radio" id="upload-option-2" name="upload-option" value="2">
+                <label for="upload-option-2">Upload all files to AGOL and add links</label>
+            </div>
+            <div>
+                <input type="radio" id="upload-option-3" name="upload-option" value="3">
+                <label for="upload-option-3">Only attach files under 10MB (skip larger files)</label>
+            </div>
+        </div>
         <div class="button-row">
             <button id="check-credentials-btn">Check Credentials</button>
         </div>

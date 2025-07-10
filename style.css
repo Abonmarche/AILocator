@@ -186,6 +186,38 @@
     margin-top: 22px;
 }
 
+.upload-options {
+    margin: 20px auto;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 10px;
+    border: 1px solid #ddd;
+    max-width: 500px;
+}
+
+.upload-options > label {
+    display: block;
+    color: #333;
+    margin-bottom: 10px;
+    font-weight: bold;
+    font-size: 1.08em;
+}
+
+.upload-options > div {
+    margin: 8px 0;
+    text-align: left;
+}
+
+.upload-options input[type="radio"] {
+    margin-right: 8px;
+}
+
+.upload-options label[for^="upload-option"] {
+    color: #555;
+    font-size: 14px;
+    cursor: pointer;
+}
+
 #file-info {
     margin-top: 30px;
     margin-bottom: 38px;

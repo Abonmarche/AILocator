@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGOL Upload Test</title>
+    <link rel="stylesheet" href="https://js.arcgis.com/4.31/esri/themes/light/main.css">
+    <script src="https://js.arcgis.com/4.31/"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        
+        .drop-zone {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            background: white;
+            margin: 20px 0;
+            cursor: pointer;
+        }
+        
+        .drop-zone.dragover {
+            background: #e0e0e0;
+            border-color: #666;
+        }
+        
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        
+        button {
+            background: #0079c1;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        
+        button:hover {
+            background: #005a87;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 20px 0;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .result {
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        
+        .error {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AGOL Upload Test</h1>
+        
+        <div id="drop-zone" class="drop-zone">
+            <p>Drag & Drop a file here or click to select</p>
+            <p>Max file size: 100MB</p>
+            <input type="file" id="file-input" style="display: none;">
+        </div>
+        
+        <div id="file-info" style="margin: 10px 0;"></div>
+        
+        <div>
+            <label for="username">AGOL Username:</label>
+            <input type="text" id="username" placeholder="Enter your username">
+        </div>
+        
+        <div>
+            <label for="password">AGOL Password:</label>
+            <input type="password" id="password" placeholder="Enter your password">
+        </div>
+        
+        <button id="upload-btn" disabled>Upload to AGOL</button>
+        
+        <div id="status" class="status"></div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+        let token = null;
+        
+        // Status logging
+        function log(message) {
+            const status = document.getElementById('status');
+            const timestamp = new Date().toLocaleTimeString();
+            status.textContent += `[${timestamp}] ${message}\n`;
+            status.scrollTop = status.scrollHeight;
+        }
+        
+        // File drop zone setup
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileInfo = document.getElementById('file-info');
+        const uploadBtn = document.getElementById('upload-btn');
+        const resultDiv = document.getElementById('result');
+        
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            if (file.size > 100 * 1024 * 1024) {
+                alert('File size exceeds 100MB limit');
+                return;
+            }
+            
+            selectedFile = file;
+            fileInfo.innerHTML = `<strong>Selected file:</strong> ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            uploadBtn.disabled = false;
+            log(`File selected: ${file.name}`);
+        }
+        
+        // Get portal information
+        async function getPortalInfo(token) {
+            log('Getting portal information...');
+            
+            const portalUrl = 'https://www.arcgis.com/sharing/rest/portals/self';
+            const params = new URLSearchParams({
+                token: token,
+                f: 'json'
+            });
+            
+            try {
+                const response = await fetch(`${portalUrl}?${params}`);
+                const data = await response.json();
+                
+                if (data.portalHostname) {
+                    log(`Portal hostname: ${data.portalHostname}`);
+                    return data;
+                } else {
+                    throw new Error('Failed to get portal information');
+                }
+            } catch (error) {
+                log(`Portal info error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Authentication function
+        async function authenticate() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                throw new Error('Username and password are required');
+            }
+            
+            log('Authenticating with AGOL...');
+            
+            const tokenUrl = 'https://www.arcgis.com/sharing/rest/generateToken';
+            const params = new URLSearchParams({
+                username: username,
+                password: password,
+                referer: window.location.origin,
+                f: 'json'
+            });
+            
+            try {
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: params
+                });
+                
+                const data = await response.json();
+                
+                if (data.token) {
+                    token = data.token;
+                    log('Authentication successful');
+                    
+                    // Get portal info to determine organization URLs
+                    const portalInfo = await getPortalInfo(data.token);
+                    
+                    return { 
+                        token: data.token, 
+                        username: username,
+                        portalUrl: portalInfo.portalHostname ? `https://${portalInfo.portalHostname}` : 'https://www.arcgis.com',
+                        urlKey: portalInfo.urlKey,
+                        customBaseUrl: portalInfo.customBaseUrl
+                    };
+                } else {
+                    throw new Error(data.error?.message || 'Authentication failed');
+                }
+            } catch (error) {
+                log(`Authentication error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Upload file to AGOL
+        async function uploadFile(authInfo) {
+            if (!selectedFile) {
+                throw new Error('No file selected');
+            }
+            
+            log(`Starting upload of ${selectedFile.name}...`);
+            
+            const addItemUrl = `${authInfo.portalUrl}/sharing/rest/content/users/${authInfo.username}/addItem`;
+            
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('type', 'PDF'); // You can adjust this based on file type
+            formData.append('title', selectedFile.name.replace(/\.[^/.]+$/, '')); // Remove extension
+            formData.append('tags', 'test,upload');
+            formData.append('description', 'Test upload from AGOL Upload Test app');
+            formData.append('token', authInfo.token);
+            formData.append('f', 'json');
+            
+            try {
+                const response = await fetch(addItemUrl, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.id) {
+                    log(`File uploaded successfully. Item ID: ${data.id}`);
+                    return data.id;
+                } else {
+                    throw new Error(data.error?.message || 'Upload failed');
+                }
+            } catch (error) {
+                log(`Upload error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Share item publicly
+        async function shareItemPublic(authInfo, itemId) {
+            log(`Sharing item ${itemId} publicly...`);
+            
+            const shareUrl = `${authInfo.portalUrl}/sharing/rest/content/users/${authInfo.username}/items/${itemId}/share`;
+            
+            const params = new URLSearchParams({
+                everyone: 'true',
+                org: 'false',
+                token: authInfo.token,
+                f: 'json'
+            });
+            
+            try {
+                const response = await fetch(shareUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: params
+                });
+                
+                const data = await response.json();
+                
+                if (data.itemId === itemId) {
+                    log('Item shared publicly successfully');
+                    return true;
+                } else {
+                    throw new Error('Failed to share item');
+                }
+            } catch (error) {
+                log(`Share error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Get item details
+        async function getItemDetails(authInfo, itemId) {
+            log(`Getting item details for ${itemId}...`);
+            
+            const itemUrl = `${authInfo.portalUrl}/sharing/rest/content/items/${itemId}`;
+            const params = new URLSearchParams({
+                token: authInfo.token,
+                f: 'json'
+            });
+            
+            try {
+                const response = await fetch(`${itemUrl}?${params}`);
+                const data = await response.json();
+                
+                if (data.id === itemId) {
+                    log(`Item access level: ${data.access}`);
+                    return data;
+                } else {
+                    throw new Error('Failed to get item details');
+                }
+            } catch (error) {
+                log(`Item details error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Main upload process
+        uploadBtn.addEventListener('click', async () => {
+            uploadBtn.disabled = true;
+            resultDiv.innerHTML = '';
+            
+            try {
+                // Authenticate
+                const authInfo = await authenticate();
+                
+                // Upload file
+                const itemId = await uploadFile(authInfo);
+                
+                // Share publicly
+                await shareItemPublic(authInfo, itemId);
+                
+                // Get item details to confirm sharing and get URLs
+                const itemDetails = await getItemDetails(authInfo, itemId);
+                
+                // Construct URLs based on organization
+                const dataUrl = `${authInfo.portalUrl}/sharing/rest/content/items/${itemId}/data`;
+                const itemPageUrl = `${authInfo.portalUrl}/home/item.html?id=${itemId}`;
+                
+                log(`\nSuccess! File uploaded and shared publicly.`);
+                log(`Item ID: ${itemId}`);
+                log(`Access: ${itemDetails.access}`);
+                log(`Data URL: ${dataUrl}`);
+                log(`Item Page: ${itemPageUrl}`);
+                
+                resultDiv.innerHTML = `
+                    <div class="result">
+                        <h3>Upload Successful!</h3>
+                        <p><strong>Item ID:</strong> ${itemId}</p>
+                        <p><strong>Access Level:</strong> ${itemDetails.access}</p>
+                        <p><strong>Item Type:</strong> ${itemDetails.type}</p>
+                        <p><strong>Data URL:</strong> <a href="${dataUrl}" target="_blank">${dataUrl}</a></p>
+                        <p><strong>Item Page:</strong> <a href="${itemPageUrl}" target="_blank">${itemPageUrl}</a></p>
+                        <p><strong>Organization:</strong> ${authInfo.portalUrl}</p>
+                    </div>
+                `;
+                
+            } catch (error) {
+                log(`Error: ${error.message}`);
+                resultDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            } finally {
+                uploadBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
