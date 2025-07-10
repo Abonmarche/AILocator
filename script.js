@@ -1,3 +1,145 @@
+// Get portal information for AGOL uploads
+async function getPortalInfo(token) {
+    logStatus('Getting portal information...');
+    
+    const portalUrl = 'https://www.arcgis.com/sharing/rest/portals/self';
+    const params = new URLSearchParams({
+        token: token,
+        f: 'json'
+    });
+    
+    try {
+        const response = await fetch(`${portalUrl}?${params}`);
+        const data = await response.json();
+        
+        if (data.portalHostname) {
+            logStatus(`Portal hostname: ${data.portalHostname}`);
+            return data;
+        } else {
+            throw new Error('Failed to get portal information');
+        }
+    } catch (error) {
+        logStatus(`Portal info error: ${error.message}`);
+        throw error;
+    }
+}
+
+// Upload file to AGOL as content item
+async function uploadFileToAGOL(file, authInfo) {
+    logStatus(`Starting AGOL upload of ${file.name}...`);
+    
+    const addItemUrl = `${authInfo.portalUrl}/sharing/rest/content/users/${authInfo.username}/addItem`;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('type', file.type === 'application/pdf' ? 'PDF' : 'Image');
+    formData.append('title', file.name.replace(/\.[^/.]+$/, '')); // Remove extension
+    formData.append('tags', 'AILocator,ProjectLimits');
+    formData.append('description', `Uploaded by AILocator for project limits analysis`);
+    formData.append('token', authInfo.token);
+    formData.append('f', 'json');
+    
+    try {
+        const response = await fetch(addItemUrl, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.id) {
+            logStatus(`File uploaded successfully. Item ID: ${data.id}`);
+            return data.id;
+        } else {
+            throw new Error(data.error?.message || 'Upload failed');
+        }
+    } catch (error) {
+        logStatus(`Upload error: ${error.message}`);
+        throw error;
+    }
+}
+
+// Share AGOL item publicly
+async function shareItemPublic(authInfo, itemId) {
+    logStatus(`Sharing item ${itemId} publicly...`);
+    
+    const shareUrl = `${authInfo.portalUrl}/sharing/rest/content/users/${authInfo.username}/items/${itemId}/share`;
+    
+    const params = new URLSearchParams({
+        everyone: 'true',
+        org: 'false',
+        token: authInfo.token,
+        f: 'json'
+    });
+    
+    try {
+        const response = await fetch(shareUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: params
+        });
+        
+        const data = await response.json();
+        
+        if (data.itemId === itemId) {
+            logStatus('Item shared publicly successfully');
+            return true;
+        } else {
+            throw new Error('Failed to share item');
+        }
+    } catch (error) {
+        logStatus(`Share error: ${error.message}`);
+        throw error;
+    }
+}
+
+// Get current authentication token
+async function getCurrentToken() {
+    return new Promise((resolve) => {
+        require(["esri/identity/IdentityManager"], function(IdentityManager) {
+            const credential = IdentityManager.findCredential("https://www.arcgis.com/sharing/rest");
+            if (credential && credential.token) {
+                resolve(credential.token);
+            } else {
+                resolve(null);
+            }
+        });
+    });
+}
+
+// Add attachment to feature
+async function addAttachmentToFeature(featureLayerUrl, objectId, file, token) {
+    logStatus(`Adding attachment ${file.name} to feature ${objectId}...`);
+    
+    const attachmentUrl = `${featureLayerUrl}/${objectId}/addAttachment`;
+    
+    const formData = new FormData();
+    formData.append('attachment', file);
+    formData.append('token', token);
+    formData.append('f', 'json');
+    
+    try {
+        const response = await fetch(attachmentUrl, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.addAttachmentResult && data.addAttachmentResult.success) {
+            logStatus(`Attachment added successfully. ID: ${data.addAttachmentResult.objectId}`);
+            return data.addAttachmentResult.objectId;
+        } else {
+            throw new Error(data.error?.message || 'Failed to add attachment');
+        }
+    } catch (error) {
+        logStatus(`Attachment error: ${error.message}`);
+        throw error;
+    }
+}
+
 // Upload PDF to Gemini File API and return file_uri
 async function uploadPdfToGemini(file, aiKey) {
     logStatus('  Starting PDF upload to Gemini File API...');
@@ -76,6 +218,50 @@ async function uploadPdfToGemini(file, aiKey) {
         throw new Error('Failed to get file_uri from Gemini upload response. Full response: ' + JSON.stringify(fileInfo));
     }
     logStatus(`  Obtained file URI: ${fileInfo.file.uri}`);
+    
+    // Check if file has a state property and wait for it to be ACTIVE
+    if (fileInfo.file.state) {
+        logStatus(`  File state: ${fileInfo.file.state}`);
+        
+        // If file is not yet active, we should wait or poll
+        if (fileInfo.file.state !== 'ACTIVE') {
+            logStatus('  Waiting for file to be processed...');
+            
+            // Poll the file status up to 10 times with 1 second delays
+            const maxAttempts = 10;
+            for (let i = 0; i < maxAttempts; i++) {
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+                
+                // Get file status
+                const statusUrl = `https://generativelanguage.googleapis.com/v1beta/${fileInfo.file.name}?key=${encodeURIComponent(aiKey)}`;
+                try {
+                    const statusRes = await fetch(statusUrl, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    if (statusRes.ok) {
+                        const statusData = await statusRes.json();
+                        logStatus(`  File state check ${i + 1}: ${statusData.state || 'unknown'}`);
+                        
+                        if (statusData.state === 'ACTIVE') {
+                            logStatus('  File is now active and ready to use.');
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    logStatus(`  Warning: Could not check file status: ${e.message}`);
+                }
+                
+                if (i === maxAttempts - 1) {
+                    logStatus('  Warning: File may not be fully processed yet, but proceeding anyway.');
+                }
+            }
+        }
+    }
+    
     return fileInfo.file.uri;
 }
 // --- Processing Log ---
@@ -87,7 +273,6 @@ function logStatus(msg) {
 }
 // Removed duplicate geocodeBtn declaration and showGeocodeBtn function
 // --- AI & Geocoding Integration ---
-const FEATURE_LAYER_URL = "https://services6.arcgis.com/o5a9nldztUcivksS/arcgis/rest/services/ProjectLimits/FeatureServer";
 const SPATIAL_REF = { wkid: 4326 };
 
 // Gemini (Google) API integration using REST fetch (no SDK required)
@@ -100,6 +285,8 @@ Your task is to decipher the project limits from the plan set. The project limit
 The start is the best-identified starting location for the project. If the project is a street segment, this should be the intersection (e.g., "Main St and First St") closest to the project start. If the project is a single site or the limits are unclear, provide any street name or intersection found in the plans that can be geocoded to approximate the project location.
 The finish is Optional. Only include this if the project is clearly and confidently identified as a single street segment with both start and end intersections clearly determined. This should be the intersection (e.g., "Main St and Second St") closest to the project end.
 Exercise caution when determining road segment limits. If you are not confident about either the start or end intersection, do not attempt to define a segment. Instead, list only a clearly identified street name or intersection as a single point to avoid inaccurate or excessively large road segment definitions.
+When looking for a location on a site plan don't forget to check the title block for a location description or site address. Make sure it is not the address of the organization that created the plans, but the actual project site address if available.
+Road plans sometimes have an overall project limits sheet that shows the project limits for the entire project. If this is not available, use the plan pages that may be a sheet set made up of multiple sheets, each with a different section of the project.
 
 Return a JSON object with the following fields, in this order:
 
@@ -155,9 +342,11 @@ Format your response as a JSON object with these fields only, in the order above
     };
     if (isPdfFile(file.name)) {
         // For PDFs under 20MB, use inline_data (base64) as per REST docs
+        // Note: Gemini docs recommend using Files API when TOTAL request size (including prompt) > 20MB
+        // We're using a conservative approach checking just the file size
         if (file.size < 20 * 1024 * 1024) {
             const base64Pdf = await fileToBase64(file);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
             const body = {
                 contents: [
                     {
@@ -181,7 +370,7 @@ Format your response as a JSON object with these fields only, in the order above
             const fileUri = await uploadPdfToGemini(file, aiKey); // This will log its own progress/errors
             logStatus(`  File uploaded, URI: ${fileUri}. Now calling generateContent.`);
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
             // Per Gemini docs, for large PDFs, prompt (text) should come first, then file_data
             const body = {
                 contents: [
@@ -230,7 +419,7 @@ Format your response as a JSON object with these fields only, in the order above
     } else {
         // Image: use base64 inline_data as before
         const base64Image = await fileToBase64(file);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
         const body = {
             contents: [
                 {
@@ -305,7 +494,9 @@ function fileToBase64(file) {
         reader.readAsDataURL(file);
     });
 }
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_INDIVIDUAL_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_ZIP_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const AGOL_MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB for AGOL uploads
 const signOutBtn = document.getElementById('sign-out-btn');
 
 function showSignOut(show) {
@@ -376,7 +567,7 @@ checkAIButton.addEventListener('click', async function() {
     checkAIButton.disabled = true;
     try {
         // Use Gemini API with a silly prompt
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=${encodeURIComponent(aiKey)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(aiKey)}`;
         const body = {
             contents: [
                 { parts: [ { text: 'Reply with three silly words to prove you are alive.' } ] }
@@ -605,41 +796,118 @@ geocodeBtn.addEventListener('click', async function() {
                                             projectnumber: aiData.projectnumber || null,
                                             projectdate:   aiData.projectdate   || null,
                                             notes:         aiData.notes         || null,
-                                            parts_json:    JSON.stringify(aiData.parts)
+                                            parts_json:    JSON.stringify(aiData.parts),
+                                            Link:          null  // Will be populated if files are uploaded to AGOL
                                         }
                                     };
 
-                                    const addUrl = `${FEATURE_LAYER_URL}/0/addFeatures`;
+                                    // Get the feature layer URL from input
+                                    const featureLayerUrl = document.getElementById('feature-layer-url').value.trim();
+                                    const addUrl = `${featureLayerUrl}/addFeatures`;
                                     esriRequest(addUrl, {
                                         method: "post",
                                         query: { f: "json", features: JSON.stringify([feature]) },
                                         responseType: "json"
                                     }).then(async r => {
+                                    }).then(async r => {
                                         if (r.data?.addResults?.[0]?.success) {
                                             logStatus("Project Added to Layer");
-                                            const oid = r.data.addResults[0].objectId;
-                                            if (oid && fileObj && (fileObj.type === 'application/pdf' || fileObj.name.toLowerCase().endsWith('.pdf'))) {
-                                                const attUrl = `${FEATURE_LAYER_URL}/0/${oid}/addAttachment`;
-                                                const formData = new FormData();
-                                                formData.append('attachment', fileObj, fileObj.name);
-                                                formData.append('f', 'json');
-                                                try {
-                                                    const attRes = await esriRequest(attUrl, {
-                                                        method: 'post',
-                                                        body: formData,
-                                                        responseType: 'json'
-                                                    });
-                                                    if (attRes.data?.addAttachmentResult?.success) {
-                                                        logStatus('  Attachment added.');
-                                                    } else {
-                                                        logStatus('  Failed to add attachment.');
-                                                        if (attRes.data?.addAttachmentResult?.error) {
-                                                            logStatus('  Attach Error: ' + JSON.stringify(attRes.data.addAttachmentResult.error));
-                                                        }
-                                                    }
-                                                } catch(attErr) {
-                                                    logStatus('  Error adding attachment: ' + (attErr.message || attErr));
+                                            const objectId = r.data.addResults[0].objectId;
+                                            logStatus(`  Feature Object ID: ${objectId}`);
+                                            
+                                            // Handle file uploads based on selected option
+                                            const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
+                                            const files = window.lastDroppedFiles || [];
+                                            
+                                            if (files.length > 0) {
+                                                logStatus(`Processing ${files.length} file(s) with upload option ${uploadOption}...`);
+                                                
+                                                // Get current token
+                                                const token = await getCurrentToken();
+                                                if (!token) {
+                                                    logStatus("  Error: No authentication token available for uploads");
+                                                    return;
                                                 }
+                                                
+                                                // Get portal info for AGOL uploads
+                                                let authInfo = null;
+                                                if (uploadOption === '1' || uploadOption === '2') {
+                                                    const portalInfo = await getPortalInfo(token);
+                                                    authInfo = {
+                                                        token: token,
+                                                        username: usernameInput.value.trim(),
+                                                        portalUrl: portalInfo.portalHostname ? `https://${portalInfo.portalHostname}` : 'https://www.arcgis.com'
+                                                    };
+                                                }
+                                                
+                                                const uploadedLinks = [];
+                                                
+                                                for (const file of files) {
+                                                    try {
+                                                        if (uploadOption === '1') {
+                                                            // Option 1: Attach files under 10MB, upload larger to AGOL
+                                                            if (file.size <= MAX_INDIVIDUAL_FILE_SIZE) {
+                                                                await addAttachmentToFeature(featureLayerUrl, objectId, file, token);
+                                                            } else {
+                                                                const itemId = await uploadFileToAGOL(file, authInfo);
+                                                                await shareItemPublic(authInfo, itemId);
+                                                                const dataUrl = `${authInfo.portalUrl}/sharing/rest/content/items/${itemId}/data`;
+                                                                uploadedLinks.push(dataUrl);
+                                                            }
+                                                        } else if (uploadOption === '2') {
+                                                            // Option 2: Upload all files to AGOL
+                                                            const itemId = await uploadFileToAGOL(file, authInfo);
+                                                            await shareItemPublic(authInfo, itemId);
+                                                            const dataUrl = `${authInfo.portalUrl}/sharing/rest/content/items/${itemId}/data`;
+                                                            uploadedLinks.push(dataUrl);
+                                                        } else if (uploadOption === '3') {
+                                                            // Option 3: Only attach files under 10MB
+                                                            if (file.size <= MAX_INDIVIDUAL_FILE_SIZE) {
+                                                                await addAttachmentToFeature(featureLayerUrl, objectId, file, token);
+                                                            } else {
+                                                                logStatus(`  Skipping ${file.name} (exceeds 10MB limit for option 3)`);
+                                                            }
+                                                        }
+                                                    } catch (error) {
+                                                        logStatus(`  Error processing ${file.name}: ${error.message}`);
+                                                    }
+                                                }
+                                                
+                                                // Update Link field if we uploaded files to AGOL
+                                                if (uploadedLinks.length > 0) {
+                                                    const linkValue = uploadedLinks.join(', ');
+                                                    logStatus(`Updating Link field with ${uploadedLinks.length} URL(s)...`);
+                                                    
+                                                    const updateUrl = `${featureLayerUrl}/updateFeatures`;
+                                                    const updateFeature = {
+                                                        attributes: {
+                                                            OBJECTID: objectId,
+                                                            Link: linkValue
+                                                        }
+                                                    };
+                                                    
+                                                    try {
+                                                        const updateResponse = await esriRequest(updateUrl, {
+                                                            method: "post",
+                                                            query: { 
+                                                                f: "json", 
+                                                                features: JSON.stringify([updateFeature]),
+                                                                token: token
+                                                            },
+                                                            responseType: "json"
+                                                        });
+                                                        
+                                                        if (updateResponse.data?.updateResults?.[0]?.success) {
+                                                            logStatus("Link field updated successfully");
+                                                        } else {
+                                                            logStatus("  Error updating Link field: " + JSON.stringify(updateResponse.data?.updateResults?.[0]?.error));
+                                                        }
+                                                    } catch (err) {
+                                                        logStatus("  Error updating feature: " + (err.message || err));
+                                                    }
+                                                }
+                                                
+                                                logStatus("File processing complete");
                                             }
                                         } else {
                                             logStatus("  Error: Feature not added.");
@@ -871,22 +1139,54 @@ function handleDrop(e) {
 
     if (files.length > 0) {
         const file = files[0];
-        if (file.size > MAX_FILE_SIZE) {
-            fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 100MB.</p>';
-            fileIsUploaded = false;
-            updateGeocodeBtnVisibility();
-            return;
-        }
         if (file.type === 'application/zip' || file.name.toLowerCase().endsWith('.zip')) {
+            if (file.size > MAX_ZIP_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>Zip file is too large. Maximum allowed size is 100MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Handle zip file
             handleZipFile(file);
         } else if (file.type.startsWith('image/') || isImageFile(file.name)) {
+            const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
+            const maxSize = (uploadOption === '2') ? AGOL_MAX_FILE_SIZE : MAX_INDIVIDUAL_FILE_SIZE;
+            
+            if (file.size > AGOL_MAX_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 100MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
+            
+            if (uploadOption === '3' && file.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large for attachment. Maximum allowed size is 10MB for option 3.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Single image file
             fileInfo.innerHTML = `<p>Received 1 image file:</p><ul><li>${file.name}</li></ul>`;
             window.lastDroppedFiles = [file];
             fileIsUploaded = true;
             updateGeocodeBtnVisibility();
         } else if (file.type === 'application/pdf' || isPdfFile(file.name)) {
+            const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
+            const maxSize = (uploadOption === '2') ? AGOL_MAX_FILE_SIZE : MAX_INDIVIDUAL_FILE_SIZE;
+            
+            if (file.size > AGOL_MAX_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 100MB.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
+            
+            if (uploadOption === '3' && file.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                fileInfo.innerHTML = '<p>File is too large for attachment. Maximum allowed size is 10MB for option 3.</p>';
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
             // Single PDF file
             fileInfo.innerHTML = `<p>Received 1 PDF file:</p><ul><li>${file.name}</li></ul>`;
             window.lastDroppedFiles = [file];
@@ -913,37 +1213,60 @@ function handleZipFile(file) {
             const pdfFiles = [];
             const fileBlobs = [];
             const promises = [];
+            const oversizedFiles = [];
             zip.forEach((relativePath, zipEntry) => {
                 if (!zipEntry.dir && (isImageFile(zipEntry.name) || isPdfFile(zipEntry.name))) {
-                    if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
-                    if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
                     promises.push(zipEntry.async('blob').then(blob => {
-                        // Create a File object if possible, else fallback to Blob with name
-                        let f;
-                        try {
-                            f = new File([blob], zipEntry.name, { type: blob.type });
-                        } catch {
-                            f = blob;
-                            f.name = zipEntry.name;
+                        const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
+                        
+                        if (blob.size > AGOL_MAX_FILE_SIZE) {
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size });
+                        } else if (uploadOption === '3' && blob.size > MAX_INDIVIDUAL_FILE_SIZE) {
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size });
+                        } else {
+                            if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
+                            if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
+                            // Create a File object if possible, else fallback to Blob with name
+                            let f;
+                            try {
+                                f = new File([blob], zipEntry.name, { type: blob.type });
+                            } catch {
+                                f = blob;
+                                f.name = zipEntry.name;
+                            }
+                            fileBlobs.push(f);
                         }
-                        fileBlobs.push(f);
                     }));
                 }
             });
             await Promise.all(promises);
+
+            let message = '';
+            if (oversizedFiles.length > 0) {
+                const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
+                const sizeLimit = uploadOption === '3' ? '10MB' : '100MB';
+                const errorMessages = oversizedFiles.map(f => `<li>${f.name} (${(f.size / 1024 / 1024).toFixed(2)}MB)</li>`).join('');
+                message += `<p>The following files inside the zip exceed the ${sizeLimit} limit and were ignored:</p><ul>${errorMessages}</ul>`;
+            }
+
             const totalFiles = imageFiles.length + pdfFiles.length;
             if (totalFiles > 0) {
                 let summary = [];
                 if (imageFiles.length > 0) summary.push(`${imageFiles.length} image file${imageFiles.length > 1 ? 's' : ''}`);
                 if (pdfFiles.length > 0) summary.push(`${pdfFiles.length} PDF file${pdfFiles.length > 1 ? 's' : ''}`);
-                fileInfo.innerHTML = `<p>Received ${summary.join(' and ')}:</p><ul>${[...imageFiles, ...pdfFiles].map(name => `<li>${name}</li>`).join('')}</ul>`;
+                if (message) {
+                    message += '<br>';
+                }
+                message += `<p>Received ${summary.join(' and ')}:</p><ul>${[...imageFiles, ...pdfFiles].map(name => `<li>${name}</li>`).join('')}</ul>`;
                 window.lastDroppedFiles = fileBlobs;
                 fileIsUploaded = true;
-            } else {
-                fileInfo.innerHTML = '<p>No image or PDF files found in the zip.</p>';
+            } else if (oversizedFiles.length === 0) {
+                message = '<p>No image or PDF files found in the zip.</p>';
                 window.lastDroppedFiles = [];
                 fileIsUploaded = false;
             }
+            
+            fileInfo.innerHTML = message;
             updateGeocodeBtnVisibility();
         } catch (err) {
             fileInfo.innerHTML = '<p>Error reading zip file.</p>';
