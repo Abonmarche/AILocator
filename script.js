@@ -809,6 +809,7 @@ geocodeBtn.addEventListener('click', async function() {
                                         query: { f: "json", features: JSON.stringify([feature]) },
                                         responseType: "json"
                                     }).then(async r => {
+                                    }).then(async r => {
                                         if (r.data?.addResults?.[0]?.success) {
                                             logStatus("Project Added to Layer");
                                             const objectId = r.data.addResults[0].objectId;
