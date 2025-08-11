@@ -497,6 +497,7 @@ function fileToBase64(file) {
 const MAX_INDIVIDUAL_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_ZIP_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 const AGOL_MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB for AGOL uploads
+const MAX_PDF_SIZE_FOR_GEMINI = 49 * 1024 * 1024; // 49 MB limit (safe margin for Gemini's 50MB limit)
 const signOutBtn = document.getElementById('sign-out-btn');
 
 function showSignOut(show) {
@@ -1184,6 +1185,14 @@ function handleDrop(e) {
             const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
             const maxSize = (uploadOption === '2') ? AGOL_MAX_FILE_SIZE : MAX_INDIVIDUAL_FILE_SIZE;
             
+            // Check Gemini limit for PDFs (49MB to be safe)
+            if (file.size > MAX_PDF_SIZE_FOR_GEMINI) {
+                fileInfo.innerHTML = `<p>PDF file is too large for AI processing. Maximum allowed size is 49MB. Your file is ${(file.size / 1024 / 1024).toFixed(1)}MB.</p>`;
+                fileIsUploaded = false;
+                updateGeocodeBtnVisibility();
+                return;
+            }
+            
             if (file.size > AGOL_MAX_FILE_SIZE) {
                 fileInfo.innerHTML = '<p>File is too large. Maximum allowed size is 100MB.</p>';
                 fileIsUploaded = false;
@@ -1229,10 +1238,13 @@ function handleZipFile(file) {
                     promises.push(zipEntry.async('blob').then(blob => {
                         const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
                         
-                        if (blob.size > AGOL_MAX_FILE_SIZE) {
-                            oversizedFiles.push({ name: zipEntry.name, size: blob.size });
+                        // Check PDF size limit for Gemini (49MB to be safe)
+                        if (isPdfFile(zipEntry.name) && blob.size > MAX_PDF_SIZE_FOR_GEMINI) {
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size, reason: 'PDF exceeds 49MB AI processing limit' });
+                        } else if (blob.size > AGOL_MAX_FILE_SIZE) {
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size, reason: 'exceeds 100MB limit' });
                         } else if (uploadOption === '3' && blob.size > MAX_INDIVIDUAL_FILE_SIZE) {
-                            oversizedFiles.push({ name: zipEntry.name, size: blob.size });
+                            oversizedFiles.push({ name: zipEntry.name, size: blob.size, reason: 'exceeds 10MB attachment limit' });
                         } else {
                             if (isImageFile(zipEntry.name)) imageFiles.push(zipEntry.name);
                             if (isPdfFile(zipEntry.name)) pdfFiles.push(zipEntry.name);
@@ -1253,10 +1265,10 @@ function handleZipFile(file) {
 
             let message = '';
             if (oversizedFiles.length > 0) {
-                const uploadOption = document.querySelector('input[name="upload-option"]:checked')?.value || '1';
-                const sizeLimit = uploadOption === '3' ? '10MB' : '100MB';
-                const errorMessages = oversizedFiles.map(f => `<li>${f.name} (${(f.size / 1024 / 1024).toFixed(2)}MB)</li>`).join('');
-                message += `<p>The following files inside the zip exceed the ${sizeLimit} limit and were ignored:</p><ul>${errorMessages}</ul>`;
+                const errorMessages = oversizedFiles.map(f => 
+                    `<li>${f.name} (${(f.size / 1024 / 1024).toFixed(1)}MB) - ${f.reason}</li>`
+                ).join('');
+                message += `<p>The following files were excluded:</p><ul>${errorMessages}</ul>`;
             }
 
             const totalFiles = imageFiles.length + pdfFiles.length;
