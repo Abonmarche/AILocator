@@ -1,6 +1,6 @@
 /* Logo image size/style */
 .logo-img {
-    max-width: 128px;
+    max-width: 100px;
     height: auto;
     margin-bottom: 18px;
     margin-top: 0;
@@ -263,14 +263,32 @@ body {
 
 h1 {
     color: #333;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
     font-weight: bold;
+}
+
+/* Report Issue button */
+.report-issue-btn {
+    display: inline-block;
+    padding: 8px 20px;
+    background: #24292e;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 20px;
+    transition: background 0.2s;
+}
+
+.report-issue-btn:hover {
+    background: #1a1e22;
 }
 
 #drop-zone {
     border: 3px dashed #ccc;
     border-radius: 10px;
-    padding: 60px 40px;
+    padding: 40px 40px;
     cursor: pointer;
     transition: border-color 0.3s, background-color 0.3s;
 }
